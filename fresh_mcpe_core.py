@@ -23,8 +23,12 @@ from urllib.parse import unquote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
-NATIVE_ROOT = Path.home() / ".local/share/mcpelauncher"
-FLATPAK_ROOT = Path.home() / ".var/app/io.mrarm.mcpelauncher/data/mcpelauncher"
+# Fresh MCPE keeps its data and its separately built runtime isolated from any
+# legacy MCPelauncher .deb/Flatpak installation.
+FRESH_HOME = Path.home() / ".local/share/fresh-mcpe"
+NATIVE_ROOT = FRESH_HOME / "mcpelauncher"
+FLATPAK_ROOT = Path.home() / ".var/app/io.mrarm.mcpelauncher/data/mcpelauncher"  # migration source only
+RUNTIME_ROOT = Path.home() / ".local/opt/fresh-mcpe/runtime"
 MOJANG_RELATIVE = Path("games/com.mojang")
 MAX_ARCHIVE_FILES = 25000
 MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
@@ -69,26 +73,16 @@ class InstalledPack:
 
 
 def discover_data_roots() -> list[DataRoot]:
-    """Return roots that exist; native install remains available as a target."""
-    candidates = [
-        DataRoot("native", "Linux install", NATIVE_ROOT, "native"),
-        DataRoot("flatpak", "Flatpak install", FLATPAK_ROOT, "flatpak"),
-    ]
-    found = [
-        item for item in candidates
-        if item.path.exists() or item.versions_dir.exists() or item.game_dir.exists()
-    ]
-    return found or [candidates[0]]
+    """Only discover Fresh MCPE's isolated data root; never launch a system install."""
+    return [DataRoot("native", "Fresh MCPE runtime", NATIVE_ROOT, "bundled")]
 
 
 def find_root(roots: Iterable[DataRoot], key: str) -> DataRoot:
+    # Old settings may contain "flatpak"; never use it as the active runtime.
     for root in roots:
-        if root.key == key:
+        if root.key == "native":
             return root
-    # A root can be selected in settings before it has any files on disk.
-    if key == "flatpak":
-        return DataRoot("flatpak", "Flatpak install", FLATPAK_ROOT, "flatpak")
-    return DataRoot("native", "Linux install", NATIVE_ROOT, "native")
+    return DataRoot("native", "Fresh MCPE runtime", NATIVE_ROOT, "bundled")
 
 
 def discover_versions(roots: Iterable[DataRoot]) -> list[InstalledVersion]:
