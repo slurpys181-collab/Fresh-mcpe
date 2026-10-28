@@ -16,13 +16,14 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout,
     QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
+    QLineEdit, QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from fresh_mcpe_core import (
     FLATPAK_ROOT, NATIVE_ROOT, DataRoot, InstalledPack, InstalledVersion,
     backup_changed_worlds, discover_data_roots, discover_versions, find_root,
-    find_compatibility_mod, import_addon, import_mod_archive, list_backups, list_installed_packs,
+    download_and_import_addon, download_and_import_mod, find_compatibility_mod,
+    import_addon, import_mod_archive, list_backups, list_installed_packs,
     list_mod_folders, restore_backup, safe_remove_pack, set_mod_enabled,
 )
 
@@ -383,6 +384,16 @@ class FreshMCPE(QMainWindow):
         action_row.addStretch(1)
         title_layout.addLayout(action_row)
         layout.addWidget(title)
+        download_panel, download_layout = panel("Install from a direct link", "Paste a direct HTTPS file URL from a trusted add-on source. This is not a searchable mod catalogue yet.")
+        download_row = QHBoxLayout()
+        self.addon_url_input = QLineEdit()
+        self.addon_url_input.setPlaceholderText("https://example.com/my-addon.mcpack")
+        download_row.addWidget(self.addon_url_input, 1)
+        download_button = button("Download & install", primary=True)
+        download_button.clicked.connect(self.download_addon_url)
+        download_row.addWidget(download_button)
+        download_layout.addLayout(download_row)
+        layout.addWidget(download_panel)
         self.addons_list = QListWidget()
         self.addons_list.setMinimumHeight(310)
         layout.addWidget(self.addons_list, 1)
@@ -461,6 +472,16 @@ class FreshMCPE(QMainWindow):
         controls.addStretch(1)
         intro_layout.addLayout(controls)
         layout.addWidget(intro)
+        download_panel, download_layout = panel("Download a mod archive", "Use a direct HTTPS URL to a ZIP/TAR archive from a trusted source. Native mods can execute code on your computer.")
+        download_row = QHBoxLayout()
+        self.mod_url_input = QLineEdit()
+        self.mod_url_input.setPlaceholderText("https://example.com/mod.zip")
+        download_row.addWidget(self.mod_url_input, 1)
+        download_button = button("Download & install", primary=True)
+        download_button.clicked.connect(self.download_mod_url)
+        download_row.addWidget(download_button)
+        download_layout.addLayout(download_row)
+        layout.addWidget(download_panel)
         mods_panel, mods_layout = panel("INSTALLED MOD FOLDERS")
         self.mods_list = QListWidget()
         self.mods_list.setMinimumHeight(300)
@@ -962,6 +983,20 @@ class FreshMCPE(QMainWindow):
             QMessageBox.information(self, "Add-on import complete", f"Installed {len(packs)} pack(s):\n\n{names}\n\nOpen Minecraft and activate the packs in the world's settings.")
         self._start_task(task, success)
 
+    def download_addon_url(self) -> None:
+        url = self.addon_url_input.text().strip()
+        if not url:
+            QMessageBox.information(self, APP_NAME, "Paste a direct HTTPS add-on download URL first.")
+            return
+
+        def success(result: object) -> None:
+            self._finish_task()
+            packs = result
+            self.addon_url_input.clear()
+            names = "\\n".join(f"• {pack.name} — {pack.kind}" for pack in packs)
+            QMessageBox.information(self, APP_NAME, f"Downloaded and installed {len(packs)} pack(s):\\n\\n{names}\\n\\nActivate the packs in the target world's settings.")
+        self._start_task(lambda: download_and_import_addon(url, self.active_root.game_dir), success)
+
     def remove_selected_addon(self) -> None:
         item = self.addons_list.currentItem()
         pack = item.data(Qt.ItemDataRole.UserRole) if item else None
@@ -1001,6 +1036,25 @@ class FreshMCPE(QMainWindow):
             lambda: import_mod_archive(Path(path), self.active_root.mods_dir),
             lambda target: (self._finish_task(), QMessageBox.information(self, APP_NAME, f"Imported mod archive to:\n{target}")),
         )
+
+    def download_mod_url(self) -> None:
+        url = self.mod_url_input.text().strip()
+        if not url:
+            QMessageBox.information(self, APP_NAME, "Paste a direct HTTPS mod-archive URL first.")
+            return
+        answer = QMessageBox.warning(
+            self, "Trust the mod source",
+            "Native launcher mods can execute code on your computer. Only continue if you trust the source and the exact archive URL.\n\nDownload and install this mod?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        def success(target: object) -> None:
+            self._finish_task()
+            self.mod_url_input.clear()
+            QMessageBox.information(self, APP_NAME, f"Downloaded and installed mod archive to:\\n{target}")
+        self._start_task(lambda: download_and_import_mod(url, self.active_root.mods_dir), success)
 
     def toggle_selected_mod(self) -> None:
         item = self.mods_list.currentItem()
