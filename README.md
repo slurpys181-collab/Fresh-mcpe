@@ -1,69 +1,83 @@
 # Fresh MCPE
 
-A modern dark desktop launcher interface for **Minecraft Bedrock Edition on Linux**, built to use the MCPelauncher runtime already installed on your computer.
+**Fresh MCPE is a standalone launcher application for Minecraft Bedrock on Linux.** It has its own modern Qt interface, its own isolated game-data folder, and a private MCPelauncher-derived runtime built from source. It does **not** use an installed MCPelauncher .deb or Flatpak executable.
 
-> **Development status: early MVP.** The first build includes a Qt desktop UI, installed-version discovery, direct runtime launch, .mcpack / .mcaddon import, custom launcher-mod folder management, and automatic changed-world backups. This is not yet a fully independent fork of the native launcher.
+The visual direction is inspired by SKlauncher 4's dark navy / violet / lavender theme and modern layout, but Fresh MCPE has its own name, UI, code, and Bedrock-specific workflows.
 
-## Screens and features
+## Current status
 
-- **Home:** installed versions, pack/mod/world counts, and a direct Play action.
-- **Add-ons:** import .mcpack, .mcaddon, or ZIP archives by button or drag-and-drop, or paste a direct HTTPS download URL. The importer reads manifest.json, routes resource packs to resource_packs and behavior packs to behavior_packs, rejects unsafe archive paths, and avoids silently overwriting installed packs.
-- **Versions:** discover versions already present in native MCPelauncher or its Flatpak data folder. Launch an installed version directly through mcpelauncher-client.
-- **Mods:** view custom launcher-mod directories, import ZIP/TAR archives, and enable/disable folders. The compatibility/update folder is protected. Native mods can execute code, so only import files from trusted sources.
-- **World safety:** automatic backups before launching when world data has changed, manual snapshots on demand, retention limits, and restore with an extra safety copy first.
-- **Performance:** launch directly and optionally wrap the game with Linux GameMode when it is installed. The FPS cap itself remains controlled by Minecraft's video settings.
-- **Sign-in / downloads:** opens MCPelauncher's own UI. Fresh MCPE does not collect or store Google/Microsoft passwords and does not redistribute Minecraft binaries.
+The launcher interface and core file-management tests are implemented. The private runtime build is scripted and pinned to a public source commit, but the full native runtime compile has not yet been run on this repository's CI. First use on Pop!_OS is still needed to confirm compilation, sign-in, a real version download, and launching a game.
+
+## Features in this build
+
+- **Three-column launcher layout:** slim icon rail, main launch workspace, and right-side starter news/social rail.
+- **Quick Play:** installed Bedrock versions plus an add-version shortcut.
+- **Private runtime:** build the MCPelauncher-derived client and version/authentication UI into ~/.local/opt/fresh-mcpe/runtime. Fresh MCPE launches only those private binaries; it never falls back to a system .deb or Flatpak binary.
+- **Private game data:** versions, mods, and worlds are stored beneath ~/.local/share/fresh-mcpe/mcpelauncher, isolated from other launcher installs.
+- **Bedrock add-ons:** import .mcpack, .mcaddon and compatible ZIP archives by file chooser or drag-and-drop; direct HTTPS archive URLs are also supported. Resource and behavior packs are routed by manifest type.
+- **Mod manager:** import, download, enable and disable custom native launcher-mod folders. Native mods can execute code and should only come from sources you trust.
+- **World safety:** automatic snapshots before launches when a world folder changes, manual snapshots, retention, and restore with a separate safety copy.
+- **Performance:** launches the private game client directly and can optionally use Linux GameMode if installed.
+- **Sign-in and version download:** opens the version/authentication component built in the same private source runtime; passwords are not collected by Fresh MCPE's own UI.
 
 ## Install on Pop!_OS / Ubuntu
 
-1. Install the native MCPelauncher UI and client from the project's official instructions: https://minecraft-linux.github.io/
-2. Open Terminal and run these commands:
+The full install builds the native game runtime from source and can install quite a few development dependencies. It needs internet access, free disk space for source/build outputs, and a working C/C++ toolchain.
+
+1. Clone the repository:
 
    ~~~bash
    git clone https://github.com/slurpys181-collab/Fresh-mcpe.git
    cd Fresh-mcpe
+   ~~~
+
+2. Run the installer:
+
+   ~~~bash
    bash install.sh
    ~~~
 
-   This installs Python/Qt Essentials in a local .venv and creates a Fresh MCPE app-menu shortcut. It does not remove or overwrite your existing launcher, worlds, or Flatpak install.
+   This installs dependencies through APT, the PySide6 interface into a local .venv, and builds the private runtime. It does not install, uninstall, or launch the MCPelauncher .deb or Flatpak package. The source build defaults to one compile job for computers with limited RAM.
 
-3. Launch **Fresh MCPE** from the app menu, or run:
+3. Open **Fresh MCPE** from your applications menu or run:
 
    ~~~bash
    bash run.sh
    ~~~
 
-## Develop / test
+To install only the interface for UI development, run bash install.sh --ui-only. Bedrock launching remains unavailable until bash runtime/build.sh completes successfully.
 
-Requires Python 3.10+ and a working GUI session.
+## Runtime build details
+
+- Runtime source repository: https://github.com/komixkat/mcpe
+- Pinned runtime commit: 9d8f19741dd894db25f4f8edb1d26c4b7b0ca5aa
+- Runtime build instructions and packages: runtime/README.md
+- Runtime source build output: ~/.local/opt/fresh-mcpe/runtime
+- Fresh MCPE private data: ~/.local/share/fresh-mcpe/mcpelauncher
+- Runtime source cache: ~/.cache/fresh-mcpe/runtime-source
+
+The runtime is derived from GPL-3.0-licensed MCPelauncher sources. Fresh MCPE's own interface and core management code are independent project files. Minecraft game files are not included; they're downloaded through the runtime's account/version flow.
+
+## Important limitation: Bedrock 1.26.60.4
+
+The earlier crash reported libpairipcore.so failing to resolve __gnu_strerror_r. The public MCPelauncher updates-mod catalogue currently lists version-specific compatibility through Bedrock 1.26.45.1, not 1.26.60.4. Building a separate runtime removes the need for the installed system package, but does not magically create the missing compatibility patch. The 1.26.60.4 fix is **not confirmed** until a matching patch is available and the game actually launches on Pop!_OS. Do not delete your old world backups while testing.
+
+## Tests
 
 ~~~bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python -m compileall -q fresh_mcpe.py fresh_mcpe_core.py tests
-.venv/bin/python fresh_mcpe.py
+bash -n install.sh runtime/build.sh run.sh
 ~~~
 
-GitHub Actions runs the core tests and Python syntax checks on pushes and pull requests.
+GitHub Actions runs the core tests, compiles Python, and constructs the Qt UI offscreen. The full C++ runtime build is not yet part of CI.
 
-## Important details and limitations
+## Links
 
-- **MCPelauncher is still required.** Fresh MCPE is an interface and management layer; it does not contain the Android Bedrock runtime or game files, bypass purchase requirements, or replace Microsoft's/Google's supported authentication flow.
-- **Version availability depends on MCPelauncher.** Only versions already installed are listed. Open MCPelauncher to sign in and download versions supported by that upstream project. A new interface cannot make an unsupported game binary compatible.
-- **FPS is not artificially promised.** Fresh MCPE launches the selected game version directly to avoid keeping a second UI process open while playing. Actual frame rate depends on the game build and driver; set the preferred limit inside Minecraft's video settings.
-- **Imported add-ons are installed, not automatically activated for every world.** Activate them in the intended world's Resource Packs / Behavior Packs settings.
-- **Automatic backups use disk space.** Changed world folders are copied to ~/Documents/Fresh MCPE Backups. The retention setting prunes old automatic snapshots; keep separate copies of valuable worlds as well.
-- **Native mods are trusted code.** Fresh MCPE rejects path-traversal archive entries and protects the standard MCPelauncher update-mod folder from the toggle control, but it cannot verify that third-party native code is safe.
-- **Compatibility is not guaranteed for every release.** The app can report and preserve crash logs, but fixing an error such as a missing symbol in libpairipcore.so requires a compatible upstream runtime or patch.
-
-## Runtime documentation
-
-- MCPelauncher project: https://github.com/minecraft-linux/mcpelauncher-manifest
-- Official installation guide: https://minecraft-linux.github.io/
-- MCPelauncher FAQ / data paths: https://minecraft-linux.github.io/faq/
-- Fresh MCPE issues: https://github.com/slurpys181-collab/Fresh-mcpe/issues
+- Fresh MCPE source/issues: https://github.com/slurpys181-collab/Fresh-mcpe
+- Pinned runtime source: https://github.com/komixkat/mcpe
+- Official SKlauncher 4 visual reference: https://next.skmedix.pl/
 
 ## License
 
-Fresh MCPE's own code is MIT-licensed. Minecraft and MCPelauncher remain the property of their respective owners and are subject to their own licenses and terms.
+Fresh MCPE's own code is MIT-licensed. The separately built runtime source remains under the upstream fork's GPL-3.0 licence. Minecraft and its game files remain the property of their respective owners.
