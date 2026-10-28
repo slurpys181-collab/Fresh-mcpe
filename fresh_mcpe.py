@@ -1053,10 +1053,12 @@ class FreshMCPE(QMainWindow):
         env = runtime_env()
         env["FRESH_MCPE_RUNTIME_ROOT"] = str(RUNTIME_ROOT)
         env["FRESH_MCPE_DATA_ROOT"] = str(self.root.path)
-        command = [str(client), "-dg", str(version.path), "-m", str(self.root.mods_dir)]
+        command = [str(client), "-dg", str(version.path)]
+        # The runtime auto-loads its standard private mods directory. Pass -m only
+        # when selecting the versioned compatibility bundle required by this build.
         compat = find_compatibility_mod(version.root_path)
         if compat:
-            command = [str(client), "-dg", str(version.path), "-m", str(compat)]
+            command.extend(["-m", str(compat)])
         gamemode = shutil.which("gamemoderun")
         if self.settings.get("performance_mode", True) and gamemode:
             command.insert(0, gamemode)
