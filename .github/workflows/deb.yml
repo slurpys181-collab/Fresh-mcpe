@@ -1,0 +1,36 @@
+name: Build Fresh MCPE Debian package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packaging and UI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev python3-pyside6.qtwidgets fonts-inter xvfb
+      - name: Build .deb
+        run: |
+          chmod +x packaging/build-deb.sh
+          packaging/build-deb.sh
+      - name: UI smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python3 -m py_compile fresh_mcpe.py fresh_mcpe_core.py
+          timeout 8s xvfb-run -a python3 fresh_mcpe.py || test "$?" -eq 124
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-mcpe-deb
+          path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 30
