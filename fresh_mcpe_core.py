@@ -452,7 +452,7 @@ def find_compatibility_mod(data_root: Path) -> Path | None:
     if machine in {"x86_64", "amd64"}:
         arch = "x86_64"
     elif machine in {"aarch64", "arm64"}:
-        arch = "arm64"
+        arch = "arm64-v8a"
     elif machine.startswith("armv7"):
         arch = "armeabi-v7a"
     else:
