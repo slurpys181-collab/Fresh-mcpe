@@ -504,7 +504,7 @@ class FreshMCPE(QMainWindow):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 0, 8)
         layout.setSpacing(16)
-        intro, intro_layout = panel("World safety", "Fresh MCPE can automatically snapshot changed world folders before you launch a game. Backups are separate copies stored under Documents/Fresh MCPE Backups.")
+        intro, intro_layout = panel("World safety", "Fresh MCPE can automatically snapshot changed world folders before you launch a game. Backups are saved under Documents/Fresh MCPE Backups. Close Minecraft before requesting manual backups or restoring a world.")
         buttons = QHBoxLayout()
         backup_btn = button("Create backup now", primary=True)
         backup_btn.clicked.connect(lambda: self.start_backup(manual=True))
