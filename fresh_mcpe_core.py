@@ -561,7 +561,7 @@ def backup_changed_worlds(
         fingerprints[root.key] = signature
         created.append(snapshot)
         snapshots = sorted(
-            (p for p in source_backup_dir.iterdir() if p.is_dir() and (p / "meta.json").is_file()),
+            (p for p in source_backup_dir.iterdir() if p.is_dir() and p.name[:8].isdigit() and (p / "meta.json").is_file()),
             key=lambda p: p.name,
             reverse=True,
         )
