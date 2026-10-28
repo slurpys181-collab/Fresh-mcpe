@@ -25,7 +25,7 @@ cat > "$APP_DIR/fresh-mcpe.desktop" <<EOF
 Type=Application
 Name=Fresh MCPE
 Comment=Modern Minecraft Bedrock launcher interface for MCPelauncher
-Exec=$ROOT/.venv/bin/python $ROOT/fresh_mcpe.py
+Exec="$ROOT/.venv/bin/python" "$ROOT/fresh_mcpe.py"
 Path=$ROOT
 Terminal=false
 Categories=Game;
