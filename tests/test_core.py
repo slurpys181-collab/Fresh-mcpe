@@ -8,8 +8,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fresh_mcpe_core import (
-    DataRoot, backup_changed_worlds, download_and_import_addon, find_compatibility_mod,
-    import_addon, list_installed_packs, safe_extract_zip, safe_remove_pack, set_mod_enabled,
+    DataRoot, backup_changed_worlds, discover_versions, download_and_import_addon,
+    find_compatibility_mod, import_addon, list_installed_packs, safe_extract_zip,
+    safe_remove_pack, set_mod_enabled,
 )
 
 
@@ -95,6 +96,14 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaises(ValueError):
                 download_and_import_addon("http://localhost/bad.mcpack", Path(folder) / "games")
+
+    def test_installed_versions_sort_numerically(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = DataRoot("native", "Linux install", Path(folder), "native")
+            (root.versions_dir / "1.26.9.0").mkdir(parents=True)
+            (root.versions_dir / "1.26.10.0").mkdir(parents=True)
+            versions = discover_versions([root])
+            self.assertEqual([item.name for item in versions], ["1.26.10.0", "1.26.9.0"])
 
     def test_compatibility_mod_chooses_numeric_newest_version(self):
         with tempfile.TemporaryDirectory() as folder:
