@@ -16,7 +16,7 @@ jobs:
       - name: Install packaging and UI test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dpkg-dev fonts-inter python3-venv xvfb
+          sudo apt-get install -y dpkg-dev fonts-inter python3-venv xvfb libegl1 libgl1
       - name: Prepare UI test environment
         run: |
           python3 -m venv /tmp/fresh-mcpe-test-env
