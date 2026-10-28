@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fresh_mcpe_core import (
     DataRoot, backup_changed_worlds, discover_versions, download_and_import_addon,
-    find_compatibility_mod, import_addon, list_installed_packs, safe_extract_zip,
-    safe_remove_pack, set_mod_enabled,
+    find_compatibility_mod, import_addon, list_installed_packs, migrate_legacy_game_data,
+    safe_extract_zip, safe_remove_pack, set_mod_enabled,
 )
 
 
@@ -115,6 +115,25 @@ class CoreTests(unittest.TestCase):
             (older / "libmcpelauncher-updates.so").write_text("old", encoding="utf-8")
             (newer / "libmcpelauncher-updates.so").write_text("new", encoding="utf-8")
             self.assertEqual(find_compatibility_mod(root), newer)
+
+    def test_legacy_migration_copies_versions_and_game_data_without_mods_or_overwrites(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            old = base / "old"
+            fresh = base / "fresh"
+            (old / "versions/1.26.60.4").mkdir(parents=True)
+            (old / "games/com.mojang/minecraftWorlds/world-a").mkdir(parents=True)
+            (old / "mods").mkdir(parents=True)
+            (old / "versions/1.26.60.4/build.json").write_text("old", encoding="utf-8")
+            (old / "games/com.mojang/minecraftWorlds/world-a/levelname.txt").write_text("Legacy World", encoding="utf-8")
+            (old / "mods/unsafe-native-mod.so").write_text("do not copy", encoding="utf-8")
+            (fresh / "versions/1.26.60.4").mkdir(parents=True)
+            (fresh / "versions/1.26.60.4/build.json").write_text("fresh", encoding="utf-8")
+            result = migrate_legacy_game_data(old, fresh)
+            self.assertEqual((fresh / "versions/1.26.60.4/build.json").read_text(encoding="utf-8"), "fresh")
+            self.assertEqual((fresh / "games/com.mojang/minecraftWorlds/world-a/levelname.txt").read_text(encoding="utf-8"), "Legacy World")
+            self.assertFalse((fresh / "mods/unsafe-native-mod.so").exists())
+            self.assertGreaterEqual(result["skipped_files"], 1)
 
     def test_pack_remove_only_allows_managed_pack_paths(self):
         with tempfile.TemporaryDirectory() as folder:
