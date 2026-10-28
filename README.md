@@ -7,10 +7,11 @@ A modern dark desktop launcher interface for **Minecraft Bedrock Edition on Linu
 ## Screens and features
 
 - **Home:** installed versions, pack/mod/world counts, and a direct Play action.
-- **Add-ons:** import .mcpack, .mcaddon, or ZIP archives by button or drag-and-drop. The importer reads manifest.json, routes resource packs to resource_packs and behavior packs to behavior_packs, rejects unsafe archive paths, and avoids silently overwriting installed packs.
+- **Add-ons:** import .mcpack, .mcaddon, or ZIP archives by button or drag-and-drop, or paste a direct HTTPS download URL. The importer reads manifest.json, routes resource packs to resource_packs and behavior packs to behavior_packs, rejects unsafe archive paths, and avoids silently overwriting installed packs.
 - **Versions:** discover versions already present in native MCPelauncher or its Flatpak data folder. Launch an installed version directly through mcpelauncher-client.
 - **Mods:** view custom launcher-mod directories, import ZIP/TAR archives, and enable/disable folders. The compatibility/update folder is protected. Native mods can execute code, so only import files from trusted sources.
-- **World safety:** automatic backups before launching when world data has changed, manual backups, retention limits, and restore with an extra safety copy first.
+- **World safety:** automatic backups before launching when world data has changed, manual snapshots on demand, retention limits, and restore with an extra safety copy first.
+- **Performance:** launch directly and optionally wrap the game with Linux GameMode when it is installed. The FPS cap itself remains controlled by Minecraft's video settings.
 - **Sign-in / downloads:** opens MCPelauncher's own UI. Fresh MCPE does not collect or store Google/Microsoft passwords and does not redistribute Minecraft binaries.
 
 ## Install on Pop!_OS / Ubuntu
