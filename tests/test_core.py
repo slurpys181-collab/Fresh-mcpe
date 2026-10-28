@@ -126,7 +126,7 @@ class CoreTests(unittest.TestCase):
             game_dir = base / "games/com.mojang"
             installed = import_addon(archive, game_dir)
             self.assertEqual(installed[0].kind, "Skin pack")
-            self.assertTrue((game_dir / "skin_packs/Test Skins/manifest.json").is_file())
+            self.assertTrue((game_dir / "skin_packs/Test-Skins/manifest.json").is_file())
             self.assertEqual(list_installed_packs(game_dir)[0].kind, "Skin pack")
 
     def test_legacy_migration_copies_versions_and_game_data_without_mods_or_overwrites(self):
