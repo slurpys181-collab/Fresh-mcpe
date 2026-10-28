@@ -17,16 +17,17 @@ A modern dark desktop launcher interface for **Minecraft Bedrock Edition on Linu
 ## Install on Pop!_OS / Ubuntu
 
 1. Install the native MCPelauncher UI and client from the project's official instructions: https://minecraft-linux.github.io/
-2. Download or clone this repository to a folder in your home directory.
-3. Open Terminal in that folder and run:
+2. Open Terminal and run these commands:
 
    ~~~bash
+   git clone https://github.com/slurpys181-collab/Fresh-mcpe.git
+   cd Fresh-mcpe
    bash install.sh
    ~~~
 
-   This installs Python/Qt dependencies in a local .venv and creates a Fresh MCPE app-menu shortcut. It does not remove or overwrite your existing launcher, worlds, or Flatpak install.
+   This installs Python/Qt Essentials in a local .venv and creates a Fresh MCPE app-menu shortcut. It does not remove or overwrite your existing launcher, worlds, or Flatpak install.
 
-4. Launch **Fresh MCPE** from the app menu, or run:
+3. Launch **Fresh MCPE** from the app menu, or run:
 
    ~~~bash
    bash run.sh
