@@ -32,6 +32,7 @@ Categories=Game;
 StartupNotify=true
 EOF
 chmod 644 "$APP_DIR/fresh-mcpe.desktop"
+chmod +x "$ROOT/run.sh"
 
 echo
 echo "Fresh MCPE is installed."
