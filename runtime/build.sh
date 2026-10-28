@@ -89,15 +89,18 @@ if [[ ! -x "$PREFIX/bin/mcpelauncher-ui-qt" ]]; then
   exit 1
 fi
 
-# Deploy only runtime compatibility files, leaving other mods/worlds untouched.
+# Deploy the runtime compatibility bundle into the layout MCPelauncher discovers.
+# This fork's checked-in patch bundle is versioned for its 1.26.45.1 updates mod.
+UPDATE_VERSION="1.26.45.1"
+UPDATE_MOD_DIR="$DATA_DIR/mods/mcpelauncher-updates/$UPDATE_VERSION/$ABI"
 if [[ -f "$SOURCE_DIR/mods/libmcpelauncher-updates.so" ]]; then
-  install -Dm755 "$SOURCE_DIR/mods/libmcpelauncher-updates.so" "$DATA_DIR/mods/libmcpelauncher-updates.so"
+  install -Dm755 "$SOURCE_DIR/mods/libmcpelauncher-updates.so" "$UPDATE_MOD_DIR/libmcpelauncher-updates.so"
 fi
 if [[ -d "$SOURCE_DIR/mods/patches" ]]; then
-  mkdir -p "$DATA_DIR/mods/patches"
-  cp -a "$SOURCE_DIR/mods/patches/." "$DATA_DIR/mods/patches/"
+  mkdir -p "$UPDATE_MOD_DIR/patches"
+  cp -a "$SOURCE_DIR/mods/patches/." "$UPDATE_MOD_DIR/patches/"
 fi
-if [[ ! -f "$DATA_DIR/mods/libmcpelauncher-updates.so" ]]; then
+if [[ ! -f "$UPDATE_MOD_DIR/libmcpelauncher-updates.so" ]]; then
   echo "WARNING: the source checkout did not include the prebuilt updates mod." >&2
   echo "Recent Bedrock versions may still require a compatible runtime patch." >&2
 fi
