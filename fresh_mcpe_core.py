@@ -27,7 +27,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 # legacy MCPelauncher .deb/Flatpak installation.
 FRESH_HOME = Path.home() / ".local/share/fresh-mcpe"
 NATIVE_ROOT = FRESH_HOME / "mcpelauncher"
-FLATPAK_ROOT = Path.home() / ".var/app/io.mrarm.mcpelauncher/data/mcpelauncher"  # migration source only
+LEGACY_NATIVE_ROOT = Path.home() / ".local/share/mcpelauncher"  # copy-only migration source
+FLATPAK_ROOT = Path.home() / ".var/app/io.mrarm.mcpelauncher/data/mcpelauncher"  # copy-only migration source
 RUNTIME_ROOT = Path.home() / ".local/opt/fresh-mcpe/runtime"
 MOJANG_RELATIVE = Path("games/com.mojang")
 MAX_ARCHIVE_FILES = 25000
@@ -83,6 +84,47 @@ def find_root(roots: Iterable[DataRoot], key: str) -> DataRoot:
         if root.key == "native":
             return root
     return DataRoot("native", "Fresh MCPE runtime", NATIVE_ROOT, "bundled")
+
+
+def migrate_legacy_game_data(source_root: Path, destination_root: Path) -> dict[str, int]:
+    """Copy installed game versions and Bedrock user content without overwriting.
+
+    Login tokens, launcher settings and native launcher binaries/mods are never copied.
+    Existing destination files win, so migration can be safely retried.
+    """
+    source_root = source_root.expanduser().resolve()
+    destination_root = destination_root.expanduser().resolve()
+    if source_root == destination_root or source_root in destination_root.parents or destination_root in source_root.parents:
+        raise ValueError("Source and destination data folders must be separate.")
+    counters = {"copied_files": 0, "skipped_files": 0, "copied_bytes": 0}
+    for relative in (Path("versions"), MOJANG_RELATIVE):
+        source = source_root / relative
+        destination = destination_root / relative
+        if not source.is_dir():
+            continue
+        for directory, names, files in os.walk(source, followlinks=False):
+            base = Path(directory)
+            names[:] = [name for name in names if not (base / name).is_symlink()]
+            relative_dir = base.relative_to(source)
+            target_dir = destination / relative_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for filename in files:
+                item = base / filename
+                if item.is_symlink() or not item.is_file():
+                    counters["skipped_files"] += 1
+                    continue
+                target = target_dir / filename
+                if target.exists():
+                    counters["skipped_files"] += 1
+                    continue
+                try:
+                    shutil.copy2(item, target)
+                    size = target.stat().st_size
+                    counters["copied_files"] += 1
+                    counters["copied_bytes"] += size
+                except OSError:
+                    counters["skipped_files"] += 1
+    return counters
 
 
 def discover_versions(roots: Iterable[DataRoot]) -> list[InstalledVersion]:
