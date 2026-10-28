@@ -176,6 +176,7 @@ class FreshMCPE(QMainWindow):
             ("Home", "⌂", "Home and Play"),
             ("Instances", "▦", "Installed versions"),
             ("Add-ons", "⬡", "Bedrock add-ons"),
+            ("Skins", "♧", "Skin packs and dressing room"),
             ("Mods", "✳", "Launcher mods"),
             ("Discover", "◎", "Discover content"),
             ("Worlds & backups", "▣", "Worlds and backups"),
@@ -297,6 +298,7 @@ class FreshMCPE(QMainWindow):
             "Home": self.build_home(),
             "Instances": self.build_instances(),
             "Add-ons": self.build_addons(),
+            "Skins": self.build_skins(),
             "Mods": self.build_mods(),
             "Discover": self.build_discover(),
             "Worlds & backups": self.build_worlds(),
@@ -527,6 +529,40 @@ class FreshMCPE(QMainWindow):
         note.setWordWrap(True)
         root.addWidget(note)
         return self.scroll_page(body)
+
+    def build_skins(self) -> QWidget:
+        body = QWidget()
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 6)
+        panel, layout = make_panel("Skins & dressing room", "Import Bedrock skin packs. After importing, choose a skin in Minecraft's Dressing Room / Classic Skins interface. Marketplace account features remain controlled by the game.")
+        row = QHBoxLayout()
+        choose = make_button("＋ Import skin pack", "primary", 40)
+        choose.clicked.connect(self.choose_addons)
+        row.addWidget(choose)
+        folder = make_button("Open skin packs folder", "secondary", 40)
+        folder.clicked.connect(lambda: self.open_path(self.root.game_dir / "skin_packs"))
+        row.addWidget(folder)
+        layout.addLayout(row)
+        root.addWidget(panel)
+        packs_panel, packs_layout = make_panel("Installed skin packs")
+        self.skins_list = QListWidget()
+        self.skins_list.setMinimumHeight(300)
+        packs_layout.addWidget(self.skins_list)
+        remove = make_button("Remove selected skin pack", "secondary")
+        remove.clicked.connect(self.remove_selected_skin)
+        packs_layout.addWidget(remove, alignment=Qt.AlignmentFlag.AlignLeft)
+        root.addWidget(packs_panel, 1)
+        return self.scroll_page(body)
+
+    def remove_selected_skin(self) -> None:
+        item = self.skins_list.currentItem()
+        pack = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not isinstance(pack, InstalledPack) or pack.kind != "Skin pack":
+            self.notice("Select a skin pack", "Choose an installed skin pack first.")
+            return
+        if QMessageBox.question(self, "Remove skin pack", f"Remove {pack.name} from Fresh MCPE?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+            return
+        self.start_task(lambda: safe_remove_pack(pack, self.root.game_dir), lambda _result: (self.finish_task(), self.notice("Skin pack removed", pack.name)))
 
     def build_mods(self) -> QWidget:
         body = QWidget()
@@ -829,6 +865,7 @@ class FreshMCPE(QMainWindow):
         if not self.versions:
             self.instances_list.addItem("No versions installed in Fresh MCPE yet. Click + to sign in and install one.")
         self.refresh_addons()
+        self.refresh_skins()
         self.refresh_mods()
         self.refresh_worlds()
         self.refresh_backups()
@@ -858,6 +895,19 @@ class FreshMCPE(QMainWindow):
                 view.addItem(item)
             if not packs:
                 view.addItem("No Bedrock packs installed in this Fresh MCPE instance yet.")
+
+    def refresh_skins(self) -> None:
+        view = getattr(self, "skins_list", None)
+        if view is None:
+            return
+        view.clear()
+        packs = [pack for pack in list_installed_packs(self.root.game_dir) if pack.kind == "Skin pack"]
+        for pack in packs:
+            item = QListWidgetItem(f"♧  {pack.name}  ·  v{pack.version}\n{pack.path}")
+            item.setData(Qt.ItemDataRole.UserRole, pack)
+            view.addItem(item)
+        if not packs:
+            view.addItem("No skin packs installed. Import a Bedrock skin-pack .mcpack to start.")
 
     def refresh_mods(self) -> None:
         view = getattr(self, "mods_list", None)
