@@ -85,6 +85,8 @@ class CoreTests(unittest.TestCase):
             unchanged, same_fingerprints = backup_changed_worlds([root], base / "backups", fingerprints, keep=5)
             self.assertEqual(unchanged, [])
             self.assertEqual(same_fingerprints, fingerprints)
+            forced, _ = backup_changed_worlds([root], base / "backups", fingerprints, keep=5, force=True)
+            self.assertEqual(len(forced), 1)
             (worlds / "levelname.txt").write_text("Changed name", encoding="utf-8")
             updated, _ = backup_changed_worlds([root], base / "backups", fingerprints, keep=5)
             self.assertEqual(len(updated), 1)
