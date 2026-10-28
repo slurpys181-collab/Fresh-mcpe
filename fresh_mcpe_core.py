@@ -340,8 +340,7 @@ class _HTTPSRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, msg, headers, newurl)
 
 
-def download_and_import_addon(url: str, game_dir: Path) -> list[InstalledPack]:
-    """Download an HTTPS Bedrock add-on archive and install it via the safe importer."""
+def _download_archive(url: str, output_dir: Path, allowed_extensions: tuple[str, ...]) -> Path:
     _validate_https_url(url)
     opener = build_opener(_HTTPSRedirectHandler())
     request = Request(url.strip(), headers={"User-Agent": "Fresh-MCPE/0.1 (+https://github.com/slurpys181-collab/Fresh-mcpe)"})
@@ -351,36 +350,51 @@ def download_and_import_addon(url: str, game_dir: Path) -> list[InstalledPack]:
         content_length = headers.get("Content-Length")
         if content_length:
             try:
-                if int(content_length) > DOWNLOAD_LIMIT_BYTES:
-                    raise ValueError("Download exceeds the 250 MiB safety limit.")
+                length = int(content_length)
             except ValueError as exc:
-                if "safety limit" in str(exc):
-                    raise
+                raise ValueError("The server sent an invalid content length.") from exc
+            if length > DOWNLOAD_LIMIT_BYTES:
+                raise ValueError("Download exceeds the 250 MiB safety limit.")
         disposition = headers.get("Content-Disposition", "")
-        match = re.search(r"filename\\*=UTF-8''([^;]+)", disposition, flags=re.IGNORECASE)
+        match = re.search(r"filename\*=UTF-8''([^;]+)", disposition, flags=re.IGNORECASE)
         if match:
             filename = unquote(match.group(1).strip().strip('"'))
         else:
-            match = re.search(r'filename\\s*=\\s*"?([^";]+)', disposition, flags=re.IGNORECASE)
+            match = re.search(r'filename\s*=\s*"?([^";]+)', disposition, flags=re.IGNORECASE)
             filename = match.group(1).strip() if match else Path(unquote(urlsplit(response.geturl()).path)).name
-        suffix = Path(filename).suffix.lower()
-        if suffix not in {".mcpack", ".mcaddon", ".zip"}:
-            raise ValueError("The direct link must serve a .mcpack, .mcaddon, or ZIP add-on file.")
-        with tempfile.TemporaryDirectory(prefix="fresh-mcpe-download-") as temporary:
-            archive_path = Path(temporary) / f"download{suffix}"
-            received = 0
-            with archive_path.open("wb") as output:
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    received += len(chunk)
-                    if received > DOWNLOAD_LIMIT_BYTES:
-                        raise ValueError("Download exceeds the 250 MiB safety limit.")
-                    output.write(chunk)
-            if not zipfile.is_zipfile(archive_path):
-                raise ValueError("The download was not a valid ZIP-based Bedrock pack archive.")
-            return import_addon(archive_path, game_dir)
+        filename_lower = filename.lower()
+        extension = next((ext for ext in sorted(allowed_extensions, key=len, reverse=True) if filename_lower.endswith(ext)), None)
+        if extension is None:
+            allowed = ", ".join(allowed_extensions)
+            raise ValueError(f"The direct link must serve one of these archive types: {allowed}.")
+        archive_path = output_dir / f"download{extension}"
+        received = 0
+        with archive_path.open("wb") as output:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                received += len(chunk)
+                if received > DOWNLOAD_LIMIT_BYTES:
+                    raise ValueError("Download exceeds the 250 MiB safety limit.")
+                output.write(chunk)
+    if not zipfile.is_zipfile(archive_path) and extension in {".mcpack", ".mcaddon", ".zip"}:
+        raise ValueError("The download was not a valid ZIP-based Bedrock pack archive.")
+    return archive_path
+
+
+def download_and_import_addon(url: str, game_dir: Path) -> list[InstalledPack]:
+    """Download an HTTPS Bedrock add-on archive and install it via the safe importer."""
+    with tempfile.TemporaryDirectory(prefix="fresh-mcpe-download-") as temporary:
+        archive = _download_archive(url, Path(temporary), (".mcpack", ".mcaddon", ".zip"))
+        return import_addon(archive, game_dir)
+
+
+def download_and_import_mod(url: str, mods_dir: Path) -> Path:
+    """Download an HTTPS native-mod archive; user confirmation is handled in the UI."""
+    with tempfile.TemporaryDirectory(prefix="fresh-mcpe-mod-download-") as temporary:
+        archive = _download_archive(url, Path(temporary), (".tar.gz", ".tar.xz", ".tgz", ".tar", ".zip"))
+        return import_mod_archive(archive, mods_dir)
 
 
 def safe_remove_pack(pack: InstalledPack, game_dir: Path) -> None:
