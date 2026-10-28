@@ -990,17 +990,18 @@ class FreshMCPE(QMainWindow):
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         log_path = LOG_DIR / f"bedrock-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
         def launch() -> None:
-            with log_path.open("w", encoding="utf-8") as log:
-                subprocess.Popen(command, cwd=str(version.path), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        if self.settings.get("auto_backup", True):
-            self.backup(manual=False, next_step=launch)
-        else:
             try:
-                launch()
+                with log_path.open("w", encoding="utf-8") as log:
+                    subprocess.Popen(command, cwd=str(version.path), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 self.record_launch()
+                self.runtime_badge.setText(f"LAUNCHING {version.name}")
                 self.notice("Launching Bedrock", f"Started version {version.name} with Fresh MCPE's private runtime.\n\nCrash log:\n{log_path}")
             except OSError as exc:
                 self.notice("Launch failed", str(exc))
+        if self.settings.get("auto_backup", True):
+            self.backup(manual=False, next_step=launch)
+        else:
+            launch()
 
     def record_launch(self) -> None:
         path = CONFIG_DIR / "playtime.json"
