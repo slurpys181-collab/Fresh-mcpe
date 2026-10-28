@@ -308,6 +308,34 @@ def safe_remove_pack(pack: InstalledPack, game_dir: Path) -> None:
         shutil.rmtree(target)
 
 
+def find_compatibility_mod(data_root: Path) -> Path | None:
+    """Find the newest installed updates-mod directory for this machine architecture."""
+    updates_root = data_root / "mods" / "mcpelauncher-updates"
+    machine = os.uname().machine.lower() if hasattr(os, "uname") else "x86_64"
+    if machine in {"x86_64", "amd64"}:
+        arch = "x86_64"
+    elif machine in {"aarch64", "arm64"}:
+        arch = "arm64"
+    elif machine.startswith("armv7"):
+        arch = "armeabi-v7a"
+    else:
+        arch = machine
+    candidates = []
+    try:
+        version_folders = [p for p in updates_root.iterdir() if p.is_dir()]
+    except OSError:
+        return None
+    for version_folder in version_folders:
+        candidate = version_folder / arch
+        if candidate.is_dir() and any(candidate.iterdir()):
+            parts = tuple(int(part) for part in re.findall(r"\\d+", version_folder.name))
+            candidates.append((parts, version_folder.name, candidate))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return candidates[0][2]
+
+
 def list_mod_folders(mods_dir: Path) -> list[Path]:
     if not mods_dir.is_dir():
         return []
@@ -395,6 +423,7 @@ def backup_changed_worlds(
     backup_base: Path,
     previous_fingerprints: dict[str, str],
     keep: int = 5,
+    force: bool = False,
 ) -> tuple[list[Path], dict[str, str]]:
     """Back up world sets whose contents changed, then prune old snapshots."""
     created: list[Path] = []
@@ -405,7 +434,7 @@ def backup_changed_worlds(
         if not worlds.is_dir() or not any(worlds.iterdir()):
             continue
         signature, total_bytes, file_count = worlds_fingerprint(worlds)
-        if fingerprints.get(root.key) == signature:
+        if not force and fingerprints.get(root.key) == signature:
             continue
         source_backup_dir = backup_base / root.key
         source_backup_dir.mkdir(parents=True, exist_ok=True)
@@ -474,6 +503,7 @@ def restore_backup(snapshot: Path, backup_base: Path) -> Path:
     game_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     if current.is_dir() and any(current.iterdir()):
+        current_signature, current_bytes, current_count = worlds_fingerprint(current)
         safety_dir = base / str(payload.get("root_key", "native")) / f"pre-restore-{timestamp}"
         safety_dir.mkdir(parents=True, exist_ok=False)
         shutil.copytree(current, safety_dir / "minecraftWorlds", symlinks=True)
@@ -482,9 +512,9 @@ def restore_backup(snapshot: Path, backup_base: Path) -> Path:
             "root_key": payload.get("root_key", "native"),
             "root_label": "Safety copy before restore",
             "source_data_root": str(source_root),
-            "worlds_fingerprint": worlds_fingerprint(current)[0],
-            "file_count": worlds_fingerprint(current)[2],
-            "total_bytes": worlds_fingerprint(current)[1],
+            "worlds_fingerprint": current_signature,
+            "file_count": current_count,
+            "total_bytes": current_bytes,
         })
 
     staged = game_dir / f".fresh-mcpe-restore-{timestamp}"
