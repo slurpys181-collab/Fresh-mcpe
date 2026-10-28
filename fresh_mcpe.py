@@ -37,6 +37,7 @@ OFFICIAL_GUIDE = "https://minecraft-linux.github.io/"
 DEFAULT_SETTINGS = {
     "active_root": "native",
     "auto_backup": True,
+    "performance_mode": True,
     "backup_retention": 5,
     "world_fingerprints": {},
     "selected_root": "native",
@@ -565,6 +566,20 @@ class FreshMCPE(QMainWindow):
         setup_layout.addLayout(path_buttons)
         layout.addWidget(setup_panel)
 
+        performance_panel, performance_layout = panel("Performance options", "Keep the launcher lightweight while giving Linux GameMode an opportunity to tune system performance, if it is installed.")
+        self.gamemode_check = QCheckBox("Use GameMode for game launches when available")
+        self.gamemode_check.toggled.connect(self.change_gamemode)
+        performance_layout.addWidget(self.gamemode_check)
+        self.performance_status = QLabel("")
+        self.performance_status.setObjectName("muted")
+        self.performance_status.setWordWrap(True)
+        performance_layout.addWidget(self.performance_status)
+        performance_hint = QLabel("GameMode is optional. Install it with: sudo apt install gamemode. This does not set the in-game FPS cap; set that in Minecraft Video settings.")
+        performance_hint.setObjectName("muted")
+        performance_hint.setWordWrap(True)
+        performance_layout.addWidget(performance_hint)
+        layout.addWidget(performance_panel)
+
         about, about_layout = panel("About Fresh MCPE")
         about_text = QLabel("Fresh MCPE is an independent interface for the existing MCPelauncher runtime. It does not include Minecraft, bypass ownership checks, modify authentication tokens, or promise compatibility with every Bedrock release. A launcher UI can manage files, but it cannot repair an incompatible native game library by itself.")
         about_text.setObjectName("muted")
@@ -672,6 +687,13 @@ class FreshMCPE(QMainWindow):
         self.auto_backup_check.blockSignals(True)
         self.auto_backup_check.setChecked(bool(self.settings.get("auto_backup", True)))
         self.auto_backup_check.blockSignals(False)
+        self.gamemode_check.blockSignals(True)
+        self.gamemode_check.setChecked(bool(self.settings.get("performance_mode", True)))
+        self.gamemode_check.blockSignals(False)
+        if shutil.which("gamemoderun"):
+            self.performance_status.setText("GameMode detected. Fresh MCPE will use it when this option is enabled.")
+        else:
+            self.performance_status.setText("GameMode is not installed. Fresh MCPE will launch normally; the optional integration stays idle.")
         self.retention_combo.blockSignals(True)
         retention_idx = self.retention_combo.findData(int(self.settings.get("backup_retention", 5)))
         self.retention_combo.setCurrentIndex(max(0, retention_idx))
@@ -864,6 +886,9 @@ class FreshMCPE(QMainWindow):
         update_mod = find_compatibility_mod(version.root_path)
         if update_mod is not None:
             command.extend(["-m", str(update_mod)])
+        gamemoderun = shutil.which("gamemoderun")
+        if bool(self.settings.get("performance_mode", True)) and gamemoderun:
+            command.insert(0, gamemoderun)
         try:
             LOG_DIR.mkdir(parents=True, exist_ok=True)
             log_path = LOG_DIR / f"launch-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -1011,6 +1036,10 @@ class FreshMCPE(QMainWindow):
 
     def change_auto_backup(self, checked: bool) -> None:
         self.settings["auto_backup"] = bool(checked)
+        save_settings(self.settings)
+
+    def change_gamemode(self, checked: bool) -> None:
+        self.settings["performance_mode"] = bool(checked)
         save_settings(self.settings)
 
     def change_retention(self, index: int) -> None:
