@@ -5,9 +5,11 @@ This module deliberately does not download or redistribute Minecraft binaries.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import socket
 import shutil
 import stat
 import tarfile
@@ -17,6 +19,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Iterable
+from urllib.parse import unquote, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 NATIVE_ROOT = Path.home() / ".local/share/mcpelauncher"
@@ -297,6 +301,86 @@ def import_addon(archive_path: Path, game_dir: Path) -> list[InstalledPack]:
             installed.append(InstalledPack(label, "Resource pack" if kind == "resource_packs" else "Behavior pack", version, destination, pack_uuid))
 
     return installed
+
+
+DOWNLOAD_LIMIT_BYTES = 250 * 1024 * 1024
+
+
+def _validate_https_url(url: str) -> None:
+    parsed = urlsplit(url.strip())
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        raise ValueError("Use a direct HTTPS download URL from a trusted source.")
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname == "localhost" or hostname.endswith((".localhost", ".local", ".internal")):
+        raise ValueError("Local network addresses are not allowed.")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None:
+        if not address.is_global:
+            raise ValueError("Local or private network addresses are not allowed.")
+        return
+    try:
+        addresses = socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"Could not resolve download host: {hostname}") from exc
+    for item in addresses:
+        try:
+            if not ipaddress.ip_address(item[4][0]).is_global:
+                raise ValueError("Download host resolves to a local or private network address.")
+        except ValueError as exc:
+            if "not allowed" in str(exc) or "resolves" in str(exc):
+                raise
+
+
+class _HTTPSRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        _validate_https_url(newurl)
+        return super().redirect_request(request, fp, code, msg, headers, newurl)
+
+
+def download_and_import_addon(url: str, game_dir: Path) -> list[InstalledPack]:
+    """Download an HTTPS Bedrock add-on archive and install it via the safe importer."""
+    _validate_https_url(url)
+    opener = build_opener(_HTTPSRedirectHandler())
+    request = Request(url.strip(), headers={"User-Agent": "Fresh-MCPE/0.1 (+https://github.com/slurpys181-collab/Fresh-mcpe)"})
+    with opener.open(request, timeout=30) as response:
+        _validate_https_url(response.geturl())
+        headers = response.headers
+        content_length = headers.get("Content-Length")
+        if content_length:
+            try:
+                if int(content_length) > DOWNLOAD_LIMIT_BYTES:
+                    raise ValueError("Download exceeds the 250 MiB safety limit.")
+            except ValueError as exc:
+                if "safety limit" in str(exc):
+                    raise
+        disposition = headers.get("Content-Disposition", "")
+        match = re.search(r"filename\\*=UTF-8''([^;]+)", disposition, flags=re.IGNORECASE)
+        if match:
+            filename = unquote(match.group(1).strip().strip('"'))
+        else:
+            match = re.search(r'filename\\s*=\\s*"?([^";]+)', disposition, flags=re.IGNORECASE)
+            filename = match.group(1).strip() if match else Path(unquote(urlsplit(response.geturl()).path)).name
+        suffix = Path(filename).suffix.lower()
+        if suffix not in {".mcpack", ".mcaddon", ".zip"}:
+            raise ValueError("The direct link must serve a .mcpack, .mcaddon, or ZIP add-on file.")
+        with tempfile.TemporaryDirectory(prefix="fresh-mcpe-download-") as temporary:
+            archive_path = Path(temporary) / f"download{suffix}"
+            received = 0
+            with archive_path.open("wb") as output:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    received += len(chunk)
+                    if received > DOWNLOAD_LIMIT_BYTES:
+                        raise ValueError("Download exceeds the 250 MiB safety limit.")
+                    output.write(chunk)
+            if not zipfile.is_zipfile(archive_path):
+                raise ValueError("The download was not a valid ZIP-based Bedrock pack archive.")
+            return import_addon(archive_path, game_dir)
 
 
 def safe_remove_pack(pack: InstalledPack, game_dir: Path) -> None:
