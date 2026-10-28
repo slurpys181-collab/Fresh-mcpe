@@ -336,7 +336,8 @@ def import_addon(archive_path: Path, game_dir: Path) -> list[InstalledPack]:
             shutil.copytree(folder, destination)
             header_version = header.get("version", "?")
             version = ".".join(map(str, header_version)) if isinstance(header_version, list) else str(header_version)
-            installed.append(InstalledPack(label, "Resource pack" if kind == "resource_packs" else "Behavior pack", version, destination, pack_uuid))
+            display_kind = {"resource_packs": "Resource pack", "behavior_packs": "Behavior pack", "skin_packs": "Skin pack"}[kind]
+            installed.append(InstalledPack(label, display_kind, version, destination, pack_uuid))
 
     return installed
 
