@@ -13,20 +13,26 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install packaging and UI dependencies
+      - name: Install packaging and UI test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dpkg-dev python3-pyside6.qtwidgets fonts-inter xvfb
+          sudo apt-get install -y dpkg-dev fonts-inter python3-venv xvfb
+      - name: Prepare UI test environment
+        run: |
+          python3 -m venv /tmp/fresh-mcpe-test-env
+          /tmp/fresh-mcpe-test-env/bin/python -m pip install --disable-pip-version-check PySide6
       - name: Build .deb
         run: |
           chmod +x packaging/build-deb.sh
           packaging/build-deb.sh
       - name: UI smoke test
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: |
           python3 -m py_compile fresh_mcpe.py fresh_mcpe_core.py
-          timeout 8s xvfb-run -a python3 fresh_mcpe.py || test "$?" -eq 124
+          set +e
+          timeout 8s xvfb-run -a /tmp/fresh-mcpe-test-env/bin/python fresh_mcpe.py
+          status=$?
+          set -e
+          if [ "$status" -ne 124 ] && [ "$status" -ne 0 ]; then exit "$status"; fi
       - name: Upload Debian package
         uses: actions/upload-artifact@v4
         with:
