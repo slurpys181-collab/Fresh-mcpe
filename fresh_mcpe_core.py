@@ -328,7 +328,7 @@ def find_compatibility_mod(data_root: Path) -> Path | None:
     for version_folder in version_folders:
         candidate = version_folder / arch
         if candidate.is_dir() and any(candidate.iterdir()):
-            parts = tuple(int(part) for part in re.findall(r"\\d+", version_folder.name))
+            parts = tuple(int(part) for part in re.findall("[0-9]+", version_folder.name))
             candidates.append((parts, version_folder.name, candidate))
     if not candidates:
         return None
