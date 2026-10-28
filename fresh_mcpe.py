@@ -1034,6 +1034,18 @@ class FreshMCPE(QMainWindow):
         self.launch_version(version)
 
     def launch_version(self, version: InstalledVersion) -> None:
+        if version.name == "1.26.60.4":
+            choice = QMessageBox.warning(
+                self, "Unconfirmed Bedrock compatibility",
+                "This is the version that previously crashed with the missing __gnu_strerror_r symbol. The public compatibility-mod catalogue I checked lists supported patches only through 1.26.45.1, so this version is not confirmed to work yet.\n\nOpen the bundled version manager to choose a version with a matching patch, or try launching anyway?",
+                QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Open,
+            )
+            if choice == QMessageBox.StandardButton.Open:
+                self.open_runtime_ui()
+                return
+            if choice != QMessageBox.StandardButton.Yes:
+                return
         client = runtime_executable("mcpelauncher-client")
         if not client:
             self.build_runtime_help()
