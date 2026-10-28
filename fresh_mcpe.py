@@ -639,7 +639,7 @@ class FreshMCPE(QMainWindow):
         intro, layout = make_panel("Worlds & backups", "Worlds are kept in Fresh MCPE's isolated data directory. Backups are saved under Documents/Fresh MCPE Backups.")
         row = QHBoxLayout()
         backup = make_button("Create backup now", "primary", 40)
-        backup.clicked.connect(lambda: self.start_backup(manual=True))
+        backup.clicked.connect(lambda: self.backup(manual=True))
         row.addWidget(backup)
         folder = make_button("Open worlds folder", "secondary", 40)
         folder.clicked.connect(lambda: self.open_path(self.root.game_dir / "minecraftWorlds"))
