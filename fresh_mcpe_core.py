@@ -221,6 +221,8 @@ def _manifest_kind(payload: dict) -> str | None:
         str(item.get("type", "")).lower()
         for item in modules if isinstance(item, dict)
     } if isinstance(modules, list) else set()
+    if "skin_pack" in types:
+        return "skin_packs"
     if "resources" in types:
         return "resource_packs"
     if types.intersection({"data", "script", "client_data", "world_template"}):
@@ -239,7 +241,7 @@ def _manifest_name(payload: dict, fallback: str) -> str:
 
 def list_installed_packs(game_dir: Path) -> list[InstalledPack]:
     found: list[InstalledPack] = []
-    for folder_name, kind in (("resource_packs", "Resource pack"), ("behavior_packs", "Behavior pack")):
+    for folder_name, kind in (("resource_packs", "Resource pack"), ("behavior_packs", "Behavior pack"), ("skin_packs", "Skin pack")):
         pack_root = game_dir / folder_name
         if not pack_root.is_dir():
             continue
@@ -314,7 +316,7 @@ def import_addon(archive_path: Path, game_dir: Path) -> list[InstalledPack]:
                 "The archive may be for Java Edition or have an unsupported layout."
             )
 
-        kinds = {"resource_packs": game_dir / "resource_packs", "behavior_packs": game_dir / "behavior_packs"}
+        kinds = {"resource_packs": game_dir / "resource_packs", "behavior_packs": game_dir / "behavior_packs", "skin_packs": game_dir / "skin_packs"}
         for index, (folder, payload, kind) in enumerate(candidates):
             target_root = kinds[kind]
             target_root.mkdir(parents=True, exist_ok=True)
@@ -434,7 +436,7 @@ def download_and_import_mod(url: str, mods_dir: Path) -> Path:
 
 
 def safe_remove_pack(pack: InstalledPack, game_dir: Path) -> None:
-    allowed_roots = [(game_dir / "resource_packs").resolve(), (game_dir / "behavior_packs").resolve()]
+    allowed_roots = [(game_dir / "resource_packs").resolve(), (game_dir / "behavior_packs").resolve(), (game_dir / "skin_packs").resolve()]
     target = pack.path.resolve()
     if not any(root == target.parent for root in allowed_roots):
         raise ValueError("Refusing to remove a folder outside the managed pack directories.")
