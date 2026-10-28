@@ -19,7 +19,7 @@ Version: $VERSION
 Section: games
 Priority: optional
 Architecture: $ARCH
-Depends: python3, python3-pyside6.qtwidgets
+Depends: python3, python3-venv, fonts-inter
 Maintainer: Fresh MCPE contributors
 Description: Standalone Minecraft Bedrock launcher for Linux
  A desktop launcher for managing a private MCPelauncher-derived runtime,
@@ -27,9 +27,18 @@ Description: Standalone Minecraft Bedrock launcher for Linux
 EOF
 cat > "$STAGE/usr/bin/fresh-mcpe" <<'EOF'
 #!/usr/bin/env bash
-set -e
-cd /opt/fresh-mcpe
-exec /usr/bin/python3 /opt/fresh-mcpe/fresh_mcpe.py "$@"
+set -euo pipefail
+APP_DIR="/opt/fresh-mcpe"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/fresh-mcpe"
+VENV="$DATA_HOME/python-env"
+mkdir -p "$DATA_HOME"
+if [[ ! -x "$VENV/bin/python" ]]; then
+  echo "Fresh MCPE first-run setup: installing its Python UI..."
+  python3 -m venv "$VENV"
+  "$VENV/bin/python" -m pip install --disable-pip-version-check --upgrade pip
+  "$VENV/bin/python" -m pip install --disable-pip-version-check "PySide6>=6.6,<7"
+fi
+exec "$VENV/bin/python" "$APP_DIR/fresh_mcpe.py" "$@"
 EOF
 chmod 755 "$STAGE/usr/bin/fresh-mcpe"
 cat > "$STAGE/usr/share/applications/fresh-mcpe.desktop" <<'EOF'
