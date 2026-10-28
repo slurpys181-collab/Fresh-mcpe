@@ -993,8 +993,8 @@ class FreshMCPE(QMainWindow):
             self._finish_task()
             packs = result
             self.addon_url_input.clear()
-            names = "\\n".join(f"• {pack.name} — {pack.kind}" for pack in packs)
-            QMessageBox.information(self, APP_NAME, f"Downloaded and installed {len(packs)} pack(s):\\n\\n{names}\\n\\nActivate the packs in the target world's settings.")
+            names = "\n".join(f"• {pack.name} — {pack.kind}" for pack in packs)
+            QMessageBox.information(self, APP_NAME, f"Downloaded and installed {len(packs)} pack(s):\n\n{names}\n\nActivate the packs in the target world's settings.")
         self._start_task(lambda: download_and_import_addon(url, self.active_root.game_dir), success)
 
     def remove_selected_addon(self) -> None:
@@ -1053,7 +1053,7 @@ class FreshMCPE(QMainWindow):
         def success(target: object) -> None:
             self._finish_task()
             self.mod_url_input.clear()
-            QMessageBox.information(self, APP_NAME, f"Downloaded and installed mod archive to:\\n{target}")
+            QMessageBox.information(self, APP_NAME, f"Downloaded and installed mod archive to:\n{target})
         self._start_task(lambda: download_and_import_mod(url, self.active_root.mods_dir), success)
 
     def toggle_selected_mod(self) -> None:
