@@ -100,7 +100,7 @@ def discover_versions(roots: Iterable[DataRoot]) -> list[InstalledVersion]:
             dirs = [p for p in root.versions_dir.iterdir() if p.is_dir()]
         except OSError:
             continue
-        for folder in sorted(dirs, key=lambda p: p.name.casefold(), reverse=True):
+        for folder in sorted(dirs, key=lambda p: (tuple(int(part) for part in re.findall("[0-9]+", p.name)), p.name.casefold()), reverse=True):
             result.append(InstalledVersion(folder.name, root.key, root.label, root.path, folder))
     return result
 
