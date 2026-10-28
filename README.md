@@ -20,6 +20,14 @@ The launcher interface and core file-management tests are implemented. The priva
 - **Performance:** launches the private game client directly and can optionally use Linux GameMode if installed.
 - **Sign-in and version download:** opens the version/authentication component built in the same private source runtime; passwords are not collected by Fresh MCPE's own UI.
 
+## Download Fresh MCPE
+
+- [Download the latest source bundle as a ZIP](https://github.com/slurpys181-collab/Fresh-mcpe/archive/refs/heads/main.zip)
+- [Browse the source code](https://github.com/slurpys181-collab/Fresh-mcpe)
+- [Check automated tests](https://github.com/slurpys181-collab/Fresh-mcpe/actions/workflows/ci.yml)
+
+The ZIP is the runnable project source, not a precompiled installer. The install script builds the private Bedrock launcher runtime on your Pop!_OS system. A full runtime build and live Bedrock launch have not yet been validated in CI.
+
 ## Install on Pop!_OS / Ubuntu
 
 The full install builds the native game runtime from source and can install quite a few development dependencies. It needs internet access, free disk space for source/build outputs, and a working C/C++ toolchain.
