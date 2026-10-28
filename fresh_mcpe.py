@@ -1053,7 +1053,7 @@ class FreshMCPE(QMainWindow):
         def success(target: object) -> None:
             self._finish_task()
             self.mod_url_input.clear()
-            QMessageBox.information(self, APP_NAME, f"Downloaded and installed mod archive to:\n{target})
+            QMessageBox.information(self, APP_NAME, f"Downloaded and installed mod archive to:\n{target}")
         self._start_task(lambda: download_and_import_mod(url, self.active_root.mods_dir), success)
 
     def toggle_selected_mod(self) -> None:
