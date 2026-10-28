@@ -1374,7 +1374,7 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
     app.setStyle("Fusion")
-    app.setFont(QFont("Noto Sans", 10))
+    app.setFont(QFont("Inter", 10))
     app.setStyleSheet(style())
     window = FreshMCPE()
     window.show()
