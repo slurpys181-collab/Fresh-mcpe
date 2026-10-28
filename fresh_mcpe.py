@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fresh MCPE - a lightweight modern desktop shell for MCPelauncher."""
+"""Fresh MCPE: standalone launcher shell with a source-built private runtime."""
 from __future__ import annotations
 
 import json
@@ -11,22 +11,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QThread, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout,
-    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QLineEdit, QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+    QMessageBox, QPushButton, QScrollArea, QSpinBox, QDialog, QDialogButtonBox,
+    QFormLayout, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from fresh_mcpe_core import (
-    FLATPAK_ROOT, NATIVE_ROOT, DataRoot, InstalledPack, InstalledVersion,
-    backup_changed_worlds, discover_data_roots, discover_versions, find_root,
-    download_and_import_addon, download_and_import_mod, find_compatibility_mod,
-    import_addon, import_mod_archive, list_backups, list_installed_packs,
-    list_mod_folders, restore_backup, safe_remove_pack, set_mod_enabled,
+    FRESH_HOME, NATIVE_ROOT, RUNTIME_ROOT, DataRoot, InstalledPack, InstalledVersion,
+    backup_changed_worlds, discover_data_roots, discover_versions, download_and_import_addon,
+    download_and_import_mod, find_compatibility_mod, find_root, import_addon,
+    import_mod_archive, list_backups, list_installed_packs, list_mod_folders,
+    restore_backup, safe_remove_pack, set_mod_enabled,
 )
-
 
 APP_NAME = "Fresh MCPE"
 CONFIG_DIR = Path.home() / ".config/fresh-mcpe"
@@ -34,25 +34,24 @@ CONFIG_PATH = CONFIG_DIR / "settings.json"
 BACKUP_DIR = Path.home() / "Documents" / "Fresh MCPE Backups"
 LOG_DIR = Path.home() / ".local/state/fresh-mcpe/logs"
 GITHUB_URL = "https://github.com/slurpys181-collab/Fresh-mcpe"
-OFFICIAL_GUIDE = "https://minecraft-linux.github.io/"
+RUNTIME_SOURCE_URL = "https://github.com/komixkat/mcpe"
 DEFAULT_SETTINGS = {
-    "active_root": "native",
     "auto_backup": True,
-    "performance_mode": True,
     "backup_retention": 5,
     "world_fingerprints": {},
-    "selected_root": "native",
     "selected_version": "",
+    "selected_profile": "metacopy",
+    "performance_mode": True,
 }
 
 
 def read_settings() -> dict:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
+        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
             merged = dict(DEFAULT_SETTINGS)
-            merged.update(payload)
+            merged.update(data)
             return merged
     except (OSError, json.JSONDecodeError):
         pass
@@ -66,42 +65,58 @@ def save_settings(settings: dict) -> None:
     tmp.replace(CONFIG_PATH)
 
 
-def format_bytes(value: int) -> str:
-    number = float(max(0, value))
+def runtime_env() -> dict[str, str]:
+    env = os.environ.copy()
+    # Isolate the runtime's standard "mcpelauncher" data directory under Fresh MCPE.
+    env["XDG_DATA_HOME"] = str(FRESH_HOME)
+    env["XDG_CONFIG_HOME"] = str(Path.home() / ".config" / "fresh-mcpe" / "runtime")
+    env["PATH"] = str(RUNTIME_ROOT / "bin") + os.pathsep + env.get("PATH", "")
+    env.setdefault("SDL_VIDEODRIVER", "x11")
+    env.setdefault("EGL_PLATFORM", "x11")
+    return env
+
+
+def runtime_executable(name: str) -> Path | None:
+    # Never fall back to a system executable installed by a .deb or Flatpak.
+    for candidate in (RUNTIME_ROOT / "bin" / name, RUNTIME_ROOT / "usr" / "bin" / name):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def fmt_bytes(number: int) -> str:
+    value = float(max(0, number))
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if number < 1024 or unit == "TB":
-            return f"{number:.0f} {unit}" if unit == "B" else f"{number:.1f} {unit}"
-        number /= 1024
-    return f"{number:.1f} TB"
+        if value < 1024 or unit == "TB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
 
 
-def panel(title: str | None = None, subtitle: str | None = None) -> tuple[QFrame, QVBoxLayout]:
+def make_button(text: str, kind: str = "secondary", height: int = 38) -> QPushButton:
+    item = QPushButton(text)
+    item.setObjectName(kind)
+    item.setMinimumHeight(height)
+    item.setCursor(Qt.CursorShape.PointingHandCursor)
+    return item
+
+
+def make_panel(title: str | None = None, subtitle: str | None = None, object_name: str = "panel") -> tuple[QFrame, QVBoxLayout]:
     frame = QFrame()
-    frame.setObjectName("panel")
+    frame.setObjectName(object_name)
     layout = QVBoxLayout(frame)
-    layout.setContentsMargins(20, 18, 20, 18)
-    layout.setSpacing(10)
+    layout.setContentsMargins(15, 13, 15, 13)
+    layout.setSpacing(9)
     if title:
-        title_label = QLabel(title)
-        title_label.setObjectName("panelTitle")
-        layout.addWidget(title_label)
+        lbl = QLabel(title)
+        lbl.setObjectName("panelTitle")
+        layout.addWidget(lbl)
     if subtitle:
-        sub = QLabel(subtitle)
-        sub.setObjectName("muted")
-        sub.setWordWrap(True)
-        layout.addWidget(sub)
+        lbl = QLabel(subtitle)
+        lbl.setObjectName("muted")
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
     return frame, layout
-
-
-def button(text: str, primary: bool = False, compact: bool = False) -> QPushButton:
-    result = QPushButton(text)
-    result.setObjectName("primary" if primary else "secondary")
-    result.setCursor(Qt.CursorShape.PointingHandCursor)
-    if compact:
-        result.setMinimumHeight(34)
-    else:
-        result.setMinimumHeight(42)
-    return result
 
 
 class Worker(QThread):
@@ -124,972 +139,1009 @@ class FreshMCPE(QMainWindow):
         super().__init__()
         self.settings = read_settings()
         self.roots = discover_data_roots()
-        if str(self.settings.get("active_root", "native")) not in {root.key for root in self.roots}:
-            self.settings["active_root"] = self.roots[0].key
-            save_settings(self.settings)
-        self.active_root = find_root(self.roots, str(self.settings.get("active_root", "native")))
-        self._refreshing = False
-        self._worker: Worker | None = None
-        self._nav_buttons: dict[str, QPushButton] = {}
-        self._pages: dict[str, QWidget] = {}
+        self.root = find_root(self.roots, "native")
+        self.versions: list[InstalledVersion] = []
+        self.worker: Worker | None = None
+        self.pages: dict[str, QWidget] = {}
+        self.nav: dict[str, QPushButton] = {}
+        self.refreshing = False
         self.setWindowTitle("Fresh MCPE")
-        self.setMinimumSize(1060, 680)
-        self.resize(1380, 860)
+        self.resize(1430, 890)
+        self.setMinimumSize(1120, 700)
         self.setAcceptDrops(True)
-        self._build_ui()
+        self.build_shell()
+        self.build_pages()
         self.refresh_all()
         self.navigate("Home")
 
-    def _build_ui(self) -> None:
+    def build_shell(self) -> None:
         central = QWidget()
+        central.setObjectName("shell")
         outer = QHBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(222)
-        side = QVBoxLayout(sidebar)
-        side.setContentsMargins(16, 22, 16, 18)
-        side.setSpacing(8)
-
-        brand_row = QHBoxLayout()
-        mark = QLabel("F")
-        mark.setObjectName("brandMark")
-        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setFixedSize(43, 43)
-        brand = QVBoxLayout()
-        brand_name = QLabel("FRESH MCPE")
-        brand_name.setObjectName("brandName")
-        tagline = QLabel("BEDROCK • LINUX")
-        tagline.setObjectName("brandTag")
-        brand.addWidget(brand_name)
-        brand.addWidget(tagline)
-        brand_row.addWidget(mark)
-        brand_row.addLayout(brand)
-        brand_row.addStretch(1)
-        side.addLayout(brand_row)
-        side.addSpacing(22)
-
-        nav_items = [
-            ("Home", "⌂"),
-            ("Add-ons", "⬡"),
-            ("Versions", "◷"),
-            ("Mods", "✳"),
-            ("Worlds & backups", "▣"),
-            ("Account & settings", "⚙"),
-        ]
-        for name, glyph in nav_items:
-            nav = QPushButton(f"  {glyph}    {name}")
-            nav.setObjectName("navButton")
-            nav.setCheckable(True)
-            nav.setMinimumHeight(43)
-            nav.setCursor(Qt.CursorShape.PointingHandCursor)
-            nav.clicked.connect(lambda _checked=False, page=name: self.navigate(page))
-            self._nav_buttons[name] = nav
-            side.addWidget(nav)
+        self.rail = QFrame()
+        self.rail.setObjectName("rail")
+        self.rail.setFixedWidth(70)
+        side = QVBoxLayout(self.rail)
+        side.setContentsMargins(8, 16, 8, 14)
+        side.setSpacing(7)
+        logo = QLabel("F")
+        logo.setObjectName("logo")
+        logo.setFixedSize(48, 48)
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        side.addWidget(logo, alignment=Qt.AlignmentFlag.AlignHCenter)
+        side.addSpacing(14)
+        for page, glyph, tooltip in [
+            ("Home", "⌂", "Home and Play"),
+            ("Instances", "▦", "Installed versions"),
+            ("Add-ons", "⬡", "Bedrock add-ons"),
+            ("Mods", "✳", "Launcher mods"),
+            ("Discover", "◎", "Discover content"),
+            ("Worlds & backups", "▣", "Worlds and backups"),
+        ]:
+            button = QPushButton(glyph)
+            button.setObjectName("railButton")
+            button.setToolTip(tooltip)
+            button.setCheckable(True)
+            button.setFixedSize(50, 45)
+            button.clicked.connect(lambda _checked=False, key=page: self.navigate(key))
+            self.nav[page] = button
+            side.addWidget(button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        add = QPushButton("+")
+        add.setObjectName("addButton")
+        add.setToolTip("Add version / sign in")
+        add.setFixedSize(50, 45)
+        add.clicked.connect(self.open_runtime_ui)
+        side.addWidget(add, alignment=Qt.AlignmentFlag.AlignHCenter)
         side.addStretch(1)
+        avatar = QLabel("MC")
+        avatar.setObjectName("avatar")
+        avatar.setFixedSize(43, 43)
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        side.addWidget(avatar, alignment=Qt.AlignmentFlag.AlignHCenter)
+        for glyph, tip, callback in [
+            ("♢", "Notifications", lambda: self.notice("Notifications", "Launcher notifications will appear here as they are implemented.")),
+            ("◉", "Community", lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL))),
+            ("ϟ", "Performance options", lambda: self.navigate("Settings")),
+            ("⚙", "Settings", lambda: self.navigate("Settings")),
+        ]:
+            button = QPushButton(glyph)
+            button.setObjectName("railButton")
+            button.setToolTip(tip)
+            button.setFixedSize(50, 40)
+            button.clicked.connect(callback)
+            side.addWidget(button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        runtime_box, runtime_layout = panel("RUNTIME STATUS")
-        self.runtime_status = QLabel("Checking MCPelauncher…")
-        self.runtime_status.setObjectName("muted")
-        self.runtime_status.setWordWrap(True)
-        runtime_layout.addWidget(self.runtime_status)
-        self.runtime_button = button("Open launcher", compact=True)
-        self.runtime_button.clicked.connect(self.open_native_launcher)
-        runtime_layout.addWidget(self.runtime_button)
-        side.addWidget(runtime_box)
+        workspace = QWidget()
+        workspace.setObjectName("workspace")
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(0)
+        topbar = QFrame()
+        topbar.setObjectName("topbar")
+        top = QHBoxLayout(topbar)
+        top.setContentsMargins(22, 12, 18, 12)
+        top.setSpacing(12)
+        brand = QLabel("FRESH MCPE")
+        brand.setObjectName("topBrand")
+        version = QLabel("BEDROCK • LINUX")
+        version.setObjectName("topTag")
+        top.addWidget(brand)
+        top.addWidget(version)
+        top.addStretch(1)
+        self.runtime_badge = QLabel("CHECKING RUNTIME")
+        self.runtime_badge.setObjectName("runtimeBadge")
+        top.addWidget(self.runtime_badge)
+        patreon = make_button("♡  Support the project", "support", 34)
+        patreon.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))
+        top.addWidget(patreon)
+        workspace_layout.addWidget(topbar)
 
-        foot = QLabel("FRESH MCPE  •  EARLY ACCESS")
-        foot.setObjectName("brandTag")
-        foot.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        side.addWidget(foot)
-
-        content = QWidget()
-        content.setObjectName("content")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(28, 21, 28, 22)
-        content_layout.setSpacing(16)
-        header = QHBoxLayout()
-        self.page_title = QLabel("Home")
-        self.page_title.setObjectName("pageTitle")
-        header.addWidget(self.page_title)
-        header.addStretch(1)
-        self.header_status = QLabel("●  READY")
-        self.header_status.setObjectName("statusPill")
-        header.addWidget(self.header_status)
-        help_button = button("Help ↗", compact=True)
-        help_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(OFFICIAL_GUIDE)))
-        header.addWidget(help_button)
-        content_layout.addLayout(header)
-
+        lower = QHBoxLayout()
+        lower.setContentsMargins(20, 17, 16, 17)
+        lower.setSpacing(16)
         self.stack = QStackedWidget()
-        content_layout.addWidget(self.stack, 1)
-        outer.addWidget(sidebar)
-        outer.addWidget(content, 1)
+        self.stack.setObjectName("centerStack")
+        lower.addWidget(self.stack, 1)
+
+        self.news_rail = QFrame()
+        self.news_rail.setObjectName("newsRail")
+        self.news_rail.setFixedWidth(252)
+        news = QVBoxLayout(self.news_rail)
+        news.setContentsMargins(12, 7, 1, 4)
+        news.setSpacing(10)
+        head = QHBoxLayout()
+        title = QLabel("What's new")
+        title.setObjectName("newsTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        refresh = QPushButton("↻")
+        refresh.setObjectName("smallIcon")
+        refresh.setToolTip("Refresh starter news")
+        refresh.clicked.connect(self.refresh_news)
+        head.addWidget(refresh)
+        news.addLayout(head)
+        intro = QLabel("Tools, add-ons and community updates.")
+        intro.setObjectName("muted")
+        intro.setWordWrap(True)
+        news.addWidget(intro)
+        self.news_cards = QVBoxLayout()
+        self.news_cards.setSpacing(9)
+        news.addLayout(self.news_cards)
+        news.addStretch(1)
+        social_label = QLabel("FRESH MCPE • COMMUNITY")
+        social_label.setObjectName("socialLabel")
+        social_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        news.addWidget(social_label)
+        socials = QHBoxLayout()
+        for glyph, url in [
+            ("F", GITHUB_URL), ("◉", GITHUB_URL), ("𝕏", "https://x.com/"),
+            ("▶", "https://youtube.com/"), ("◎", "https://reddit.com/"),
+        ]:
+            b = QPushButton(glyph)
+            b.setObjectName("socialButton")
+            b.setFixedSize(33, 33)
+            b.clicked.connect(lambda _checked=False, dest=url: QDesktopServices.openUrl(QUrl(dest)))
+            socials.addWidget(b)
+        news.addLayout(socials)
+        lower.addWidget(self.news_rail)
+        workspace_layout.addLayout(lower, 1)
+        outer.addWidget(self.rail)
+        outer.addWidget(workspace, 1)
         self.setCentralWidget(central)
+        self.build_news()
 
-        self._pages = {
-            "Home": self._make_home_page(),
-            "Add-ons": self._make_addons_page(),
-            "Versions": self._make_versions_page(),
-            "Mods": self._make_mods_page(),
-            "Worlds & backups": self._make_worlds_page(),
-            "Account & settings": self._make_settings_page(),
+    def build_pages(self) -> None:
+        self.pages = {
+            "Home": self.build_home(),
+            "Instances": self.build_instances(),
+            "Add-ons": self.build_addons(),
+            "Mods": self.build_mods(),
+            "Discover": self.build_discover(),
+            "Worlds & backups": self.build_worlds(),
+            "Settings": self.build_settings(),
         }
-        for page in self._pages.values():
-            self.stack.addWidget(page)
+        for widget in self.pages.values():
+            self.stack.addWidget(widget)
 
-    def _scroll_page(self, body: QWidget) -> QScrollArea:
-        scroller = QScrollArea()
-        scroller.setObjectName("pageScroll")
-        scroller.setWidgetResizable(True)
-        scroller.setFrameShape(QFrame.Shape.NoFrame)
-        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroller.setWidget(body)
-        return scroller
+    def scroll_page(self, body: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(body)
+        return scroll
 
-    def _make_home_page(self) -> QWidget:
+    def build_home(self) -> QWidget:
         body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 0, 10)
-        layout.setSpacing(18)
-
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 6)
+        root.setSpacing(16)
         hero = QFrame()
         hero.setObjectName("hero")
         hero_layout = QHBoxLayout(hero)
-        hero_layout.setContentsMargins(28, 25, 28, 24)
-        hero_layout.setSpacing(24)
+        hero_layout.setContentsMargins(22, 21, 18, 19)
+        hero_layout.setSpacing(16)
         left = QVBoxLayout()
-        overline = QLabel("YOUR BEDROCK. YOUR WAY.")
-        overline.setObjectName("greenLabel")
-        title = QLabel("Ready to play?")
+        label = QLabel("YOUR WORLD IS WAITING")
+        label.setObjectName("eyebrow")
+        left.addWidget(label)
+        nickname = str(self.settings.get("selected_profile", "metacopy")).strip() or "player"
+        title = QLabel(f"Time to torch up the base, {nickname}")
         title.setObjectName("heroTitle")
         title.setWordWrap(True)
-        description = QLabel("A cleaner home for Minecraft Bedrock on Linux.")
-        description.setObjectName("muted")
-        description.setWordWrap(True)
-        left.addWidget(overline)
         left.addWidget(title)
-        left.addWidget(description)
-        left.addSpacing(12)
-        actions = QHBoxLayout()
-        self.home_launch = button("▶   Launch Bedrock", primary=True)
-        self.home_launch.clicked.connect(self.launch_selected_version)
-        actions.addWidget(self.home_launch)
-        manage_btn = button("Manage versions")
-        manage_btn.clicked.connect(lambda: self.navigate("Versions"))
-        actions.addWidget(manage_btn)
-        left.addLayout(actions)
+        subtitle = QLabel("The mobs won't fight themselves")
+        subtitle.setObjectName("muted")
+        left.addWidget(subtitle)
+        left.addStretch(1)
+        playrow = QHBoxLayout()
+        self.play_button = make_button("▶   Play Bedrock", "primary", 44)
+        self.play_button.clicked.connect(self.launch_selected_version)
+        playrow.addWidget(self.play_button)
+        self.version_combo = QComboBox()
+        self.version_combo.setMinimumHeight(43)
+        self.version_combo.setMinimumWidth(165)
+        self.version_combo.currentIndexChanged.connect(self.on_version_changed)
+        playrow.addWidget(self.version_combo)
+        addver = make_button("＋", "soft", 43)
+        addver.setToolTip("Sign in or install a version")
+        addver.clicked.connect(self.open_runtime_ui)
+        playrow.addWidget(addver)
+        left.addLayout(playrow)
         hero_layout.addLayout(left, 3)
+        art = QFrame()
+        art.setObjectName("heroGlass")
+        art_layout = QVBoxLayout(art)
+        art_layout.setContentsMargins(12, 10, 12, 10)
+        art_layout.addWidget(QLabel("FRESH MCPE"))
+        big = QLabel("▦")
+        big.setObjectName("heroArt")
+        big.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        art_layout.addWidget(big, 1)
+        self.hero_status = QLabel("Build the private runtime to get started.")
+        self.hero_status.setObjectName("mutedSmall")
+        self.hero_status.setWordWrap(True)
+        art_layout.addWidget(self.hero_status)
+        hero_layout.addWidget(art, 1)
+        root.addWidget(hero)
 
-        right_card = QFrame()
-        right_card.setObjectName("heroRight")
-        right = QVBoxLayout(right_card)
-        right.setContentsMargins(18, 18, 18, 18)
-        cube = QLabel("▦")
-        cube.setObjectName("heroCube")
-        cube.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        right.addWidget(cube)
-        launch_label = QLabel("SELECTED VERSION")
-        launch_label.setObjectName("brandTag")
-        right.addWidget(launch_label)
-        self.home_version_combo = QComboBox()
-        self.home_version_combo.setMinimumHeight(40)
-        self.home_version_combo.currentIndexChanged.connect(
-            lambda _index: self._sync_selected_version(self.home_version_combo, self.versions_combo)
-            if hasattr(self, "versions_combo") else None
-        )
-        right.addWidget(self.home_version_combo)
-        self.version_hint = QLabel("Select an installed game version.")
-        self.version_hint.setObjectName("muted")
-        self.version_hint.setWordWrap(True)
-        right.addWidget(self.version_hint)
-        hero_layout.addWidget(right_card, 2)
-        layout.addWidget(hero)
+        quick_head = QHBoxLayout()
+        quick_title = QLabel("Quick Play")
+        quick_title.setObjectName("sectionTitle")
+        quick_head.addWidget(quick_title)
+        quick_head.addStretch(1)
+        qhelp = QLabel("Recently installed versions")
+        qhelp.setObjectName("mutedSmall")
+        quick_head.addWidget(qhelp)
+        root.addLayout(quick_head)
+        self.quick_row = QHBoxLayout()
+        self.quick_row.setSpacing(9)
+        root.addLayout(self.quick_row)
 
-        metrics = QGridLayout()
-        metrics.setHorizontalSpacing(12)
-        metrics.setVerticalSpacing(12)
-        self.metric_values: dict[str, QLabel] = {}
-        for index, (key, title_text, symbol) in enumerate([
-            ("versions", "INSTALLED VERSIONS", "◷"),
-            ("packs", "ADD-ONS INSTALLED", "⬡"),
-            ("mods", "MOD FOLDERS", "✳"),
-            ("worlds", "WORLDS", "▣"),
+        featured_head = QHBoxLayout()
+        feature_title = QLabel("Explore Bedrock")
+        feature_title.setObjectName("sectionTitle")
+        featured_head.addWidget(feature_title)
+        featured_head.addStretch(1)
+        browse = QPushButton("Browse add-ons  →")
+        browse.setObjectName("textButton")
+        browse.clicked.connect(lambda: self.navigate("Discover"))
+        featured_head.addWidget(browse)
+        root.addLayout(featured_head)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(11)
+        grid.setVerticalSpacing(11)
+        for column, (tag, name, summary, glyph, base) in enumerate([
+            ("SURVIVAL", "Survival toolkit", "Make your next world feel like yours.", "◈", "#302344"),
+            ("VISUALS", "Better visuals", "Textures, resource packs and clean UI.", "▧", "#292543"),
+            ("GAMEPLAY", "Gameplay add-ons", "Behavior packs for new ways to play.", "✳", "#342644"),
         ]):
-            frame, frame_layout = panel()
-            row = QHBoxLayout()
-            icon = QLabel(symbol)
-            icon.setObjectName("metricIcon")
-            value = QLabel("—")
-            value.setObjectName("metricValue")
-            self.metric_values[key] = value
-            text = QVBoxLayout()
-            label = QLabel(title_text)
-            label.setObjectName("brandTag")
-            text.addWidget(label)
-            text.addWidget(value)
-            row.addWidget(icon)
-            row.addLayout(text)
-            row.addStretch(1)
-            frame_layout.addLayout(row)
-            metrics.addWidget(frame, index // 2, index % 2)
-        layout.addLayout(metrics)
+            card = QFrame()
+            card.setObjectName("featureCard")
+            card.setStyleSheet(f"QFrame#featureCard {{ background: {base}; border: 1px solid #514071; border-radius: 13px; }}")
+            cv = QVBoxLayout(card)
+            cv.setContentsMargins(13, 12, 13, 12)
+            cv.setSpacing(6)
+            picture = QLabel(glyph)
+            picture.setObjectName("featureArt")
+            picture.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            picture.setMinimumHeight(62)
+            cv.addWidget(picture)
+            flag = QLabel(tag)
+            flag.setObjectName("eyebrow")
+            cv.addWidget(flag)
+            headline = QLabel(name)
+            headline.setObjectName("cardTitle")
+            cv.addWidget(headline)
+            detail = QLabel(summary)
+            detail.setObjectName("mutedSmall")
+            detail.setWordWrap(True)
+            cv.addWidget(detail)
+            button = make_button("Import a pack  ↗", "soft", 31)
+            button.clicked.connect(self.choose_addons)
+            cv.addWidget(button)
+            grid.addWidget(card, 0, column)
+        root.addLayout(grid)
 
         lower = QHBoxLayout()
-        versions_panel, versions_layout = panel("YOUR LIBRARY", "Versions already installed on this computer.")
-        self.home_versions_list = QListWidget()
-        self.home_versions_list.setMinimumHeight(205)
-        versions_layout.addWidget(self.home_versions_list)
-        versions_buttons = QHBoxLayout()
-        versions_refresh = button("Refresh versions", compact=True)
-        versions_refresh.clicked.connect(self.refresh_all)
-        versions_buttons.addWidget(versions_refresh)
-        versions_open = button("Download / sign in ↗", compact=True)
-        versions_open.clicked.connect(self.open_native_launcher)
-        versions_buttons.addWidget(versions_open)
-        versions_layout.addLayout(versions_buttons)
-        lower.addWidget(versions_panel, 3)
+        lower.setSpacing(12)
+        servers, server_layout = make_panel("Servers", "Your saved Bedrock server list")
+        server_head = QHBoxLayout()
+        server_head.addStretch(1)
+        add_server = make_button("＋ Add", "soft", 29)
+        add_server.clicked.connect(self.add_server)
+        server_head.addWidget(add_server)
+        server_layout.addLayout(server_head)
+        self.server_list = QListWidget()
+        self.server_list.setObjectName("compactList")
+        self.server_list.setMinimumHeight(115)
+        server_layout.addWidget(self.server_list)
+        lower.addWidget(servers, 3)
+        playtime, time_layout = make_panel("Your playtime", "Recorded by Fresh MCPE")
+        self.playtime_value = QLabel("0h 00m")
+        self.playtime_value.setObjectName("playtimeValue")
+        time_layout.addWidget(self.playtime_value)
+        bars = QHBoxLayout()
+        bars.setSpacing(6)
+        for height in (18, 33, 23, 43, 29, 21, 47):
+            wrap = QVBoxLayout()
+            wrap.addStretch(1)
+            bar = QFrame()
+            bar.setObjectName("chartBar")
+            bar.setFixedHeight(height)
+            bar.setMinimumWidth(12)
+            wrap.addWidget(bar)
+            bars.addLayout(wrap, 1)
+        time_layout.addLayout(bars)
+        local_note = QLabel("Session-time tracking is being added; past playtime is not imported.")
+        local_note.setObjectName("mutedSmall")
+        local_note.setWordWrap(True)
+        time_layout.addWidget(local_note)
+        lower.addWidget(playtime, 2)
+        root.addLayout(lower)
+        root.addStretch(1)
+        return self.scroll_page(body)
 
-        quick_panel, quick_layout = panel("QUICK ACTIONS")
-        for label_text, destination, detail in [
-            ("Import an add-on", "Add-ons", "Install .mcpack / .mcaddon"),
-            ("Protect my worlds", "Worlds & backups", "Back up before changing things"),
-            ("Manage native mods", "Mods", "Review enabled mod folders"),
-        ]:
-            item = QPushButton(f"{label_text}\n{detail}    →")
-            item.setObjectName("quickAction")
-            item.setMinimumHeight(66)
-            item.setCursor(Qt.CursorShape.PointingHandCursor)
-            item.clicked.connect(lambda _checked=False, page=destination: self.navigate(page))
-            quick_layout.addWidget(item)
-        lower.addWidget(quick_panel, 2)
-        layout.addLayout(lower)
-        note = QLabel("Fresh MCPE uses your installed MCPelauncher runtime. It does not ship Minecraft game files.")
+    def build_instances(self) -> QWidget:
+        body = QWidget()
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 6)
+        panel, layout = make_panel("Instances & versions", "Fresh MCPE lists game builds in its private data folder, separate from other launcher installs.")
+        row = QHBoxLayout()
+        self.instances_combo = QComboBox()
+        self.instances_combo.setMinimumHeight(42)
+        self.instances_combo.currentIndexChanged.connect(self.on_instance_changed)
+        row.addWidget(self.instances_combo, 1)
+        launch = make_button("▶ Play", "primary", 42)
+        launch.clicked.connect(self.launch_selected_version)
+        row.addWidget(launch)
+        install = make_button("＋ Sign in / install version", "secondary", 42)
+        install.clicked.connect(self.open_runtime_ui)
+        row.addWidget(install)
+        layout.addLayout(row)
+        root.addWidget(panel)
+        self.instances_list = QListWidget()
+        self.instances_list.setMinimumHeight(300)
+        root.addWidget(self.instances_list, 1)
+        note, note_layout = make_panel("Private runtime", "The client and version manager are built from source into Fresh MCPE's own runtime directory. The system .deb and Flatpak are not used.")
+        root.addWidget(note)
+        return self.scroll_page(body)
+
+    def build_addons(self) -> QWidget:
+        body = QWidget()
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 6)
+        panel, layout = make_panel("Add-on manager", "Choose or drag .mcpack / .mcaddon files, or use a direct HTTPS archive URL.")
+        row = QHBoxLayout()
+        choose = make_button("＋ Import .mcpack / .mcaddon", "primary", 40)
+        choose.clicked.connect(self.choose_addons)
+        row.addWidget(choose)
+        openres = make_button("Open resource packs", "secondary", 40)
+        openres.clicked.connect(lambda: self.open_path(self.root.game_dir / "resource_packs"))
+        row.addWidget(openres)
+        openbeh = make_button("Open behavior packs", "secondary", 40)
+        openbeh.clicked.connect(lambda: self.open_path(self.root.game_dir / "behavior_packs"))
+        row.addWidget(openbeh)
+        layout.addLayout(row)
+        urlrow = QHBoxLayout()
+        self.addon_url_input = QLineEdit()
+        self.addon_url_input.setPlaceholderText("Direct HTTPS link to .mcpack, .mcaddon or ZIP")
+        urlrow.addWidget(self.addon_url_input, 1)
+        get = make_button("Download & install", "soft", 40)
+        get.clicked.connect(self.download_addon_url)
+        urlrow.addWidget(get)
+        layout.addLayout(urlrow)
+        root.addWidget(panel)
+        packs, packs_layout = make_panel("Installed Bedrock packs")
+        self.addons_list = QListWidget()
+        self.addons_list.setMinimumHeight(300)
+        packs_layout.addWidget(self.addons_list)
+        remove = make_button("Remove selected pack", "secondary")
+        remove.clicked.connect(self.remove_selected_addon)
+        packs_layout.addWidget(remove, alignment=Qt.AlignmentFlag.AlignLeft)
+        root.addWidget(packs, 1)
+        note = QLabel("Imported packs still need activating in the chosen world's settings. Java Edition modpacks are not Bedrock add-ons.")
         note.setObjectName("muted")
         note.setWordWrap(True)
-        layout.addWidget(note)
-        return self._scroll_page(body)
+        root.addWidget(note)
+        return self.scroll_page(body)
 
-    def _make_addons_page(self) -> QWidget:
+    def build_mods(self) -> QWidget:
         body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 0, 8)
-        layout.setSpacing(16)
-        title, title_layout = panel("Add-on library", "Drag a .mcpack or .mcaddon onto this window, or import it from a file. Fresh MCPE reads the manifest and places each pack in the correct Bedrock folder.")
-        action_row = QHBoxLayout()
-        import_btn = button("＋  Import add-on", primary=True)
-        import_btn.clicked.connect(self.choose_addons)
-        action_row.addWidget(import_btn)
-        folder_btn = button("Open pack folder")
-        folder_btn.clicked.connect(lambda: self.open_path(self.active_root.game_dir / "resource_packs"))
-        action_row.addWidget(folder_btn)
-        action_row.addStretch(1)
-        title_layout.addLayout(action_row)
-        layout.addWidget(title)
-        download_panel, download_layout = panel("Install from a direct link", "Paste a direct HTTPS file URL from a trusted add-on source. This is not a searchable mod catalogue yet.")
-        download_row = QHBoxLayout()
-        self.addon_url_input = QLineEdit()
-        self.addon_url_input.setPlaceholderText("https://example.com/my-addon.mcpack")
-        download_row.addWidget(self.addon_url_input, 1)
-        download_button = button("Download & install", primary=True)
-        download_button.clicked.connect(self.download_addon_url)
-        download_row.addWidget(download_button)
-        download_layout.addLayout(download_row)
-        layout.addWidget(download_panel)
-        self.addons_list = QListWidget()
-        self.addons_list.setMinimumHeight(310)
-        layout.addWidget(self.addons_list, 1)
-        manage = QHBoxLayout()
-        refresh_btn = button("Refresh list", compact=True)
-        refresh_btn.clicked.connect(self.refresh_all)
-        manage.addWidget(refresh_btn)
-        remove_btn = button("Remove selected pack", compact=True)
-        remove_btn.clicked.connect(self.remove_selected_addon)
-        manage.addWidget(remove_btn)
-        manage.addStretch(1)
-        layout.addLayout(manage)
-        hint_frame, hint_layout = panel("HOW PACKS WORK")
-        hint = QLabel("Resource packs and behavior packs are installed separately. Importing a pack makes it available to Minecraft; to use it, activate it in the target world's Resource Packs or Behavior Packs settings. Java Edition mods are not Bedrock add-ons.")
-        hint.setObjectName("muted")
-        hint.setWordWrap(True)
-        hint_layout.addWidget(hint)
-        layout.addWidget(hint_frame)
-        return self._scroll_page(body)
-
-    def _make_versions_page(self) -> QWidget:
-        body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 0, 8)
-        layout.setSpacing(16)
-        intro, intro_layout = panel("Game versions", "Fresh MCPE detects versions that MCPelauncher has already installed. Use the original launcher to sign in and download versions it supports.")
-        self.versions_combo = QComboBox()
-        self.versions_combo.setMinimumHeight(42)
-        self.versions_combo.currentIndexChanged.connect(
-            lambda _index: self._sync_selected_version(self.versions_combo, self.home_version_combo)
-            if hasattr(self, "home_version_combo") else None
-        )
-        intro_layout.addWidget(self.versions_combo)
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 6)
+        panel, layout = make_panel("Launcher mods", "Native mods run code inside the launcher/game process. Use only builds you trust and that match your selected game version.")
         row = QHBoxLayout()
-        launch_btn = button("▶  Launch selected", primary=True)
-        launch_btn.clicked.connect(self.launch_selected_version)
-        row.addWidget(launch_btn)
-        native_btn = button("Open MCPelauncher / download versions")
-        native_btn.clicked.connect(self.open_native_launcher)
-        row.addWidget(native_btn)
-        refresh_btn = button("Refresh", compact=True)
-        refresh_btn.clicked.connect(self.refresh_all)
-        row.addWidget(refresh_btn)
-        row.addStretch(1)
-        intro_layout.addLayout(row)
-        layout.addWidget(intro)
-        list_panel, list_layout = panel("DETECTED INSTALLATIONS", "Different data roots are kept separate. Changing or removing a version is intentionally not done automatically.")
-        self.versions_list = QListWidget()
-        self.versions_list.setMinimumHeight(280)
-        list_layout.addWidget(self.versions_list)
-        layout.addWidget(list_panel, 1)
-        perf_panel, perf_layout = panel("PERFORMANCE NOTE")
-        perf_note = QLabel("The launcher runs the selected version directly to avoid an extra UI process during gameplay. Actual FPS depends on the game build, drivers, graphics settings, and hardware; set the in-game frame-rate option for a preferred cap.")
-        perf_note.setWordWrap(True)
-        perf_note.setObjectName("muted")
-        perf_layout.addWidget(perf_note)
-        layout.addWidget(perf_panel)
-        return self._scroll_page(body)
-
-    def _make_mods_page(self) -> QWidget:
-        body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 0, 8)
-        layout.setSpacing(16)
-        intro, intro_layout = panel("MCPelauncher mods", "These are launcher-side native mods, not Minecraft Bedrock .mcpack add-ons. Install only archives from sources you trust because native libraries can execute code on your computer.")
-        controls = QHBoxLayout()
-        import_btn = button("＋  Import mod archive", primary=True)
-        import_btn.clicked.connect(self.choose_mod)
-        controls.addWidget(import_btn)
-        folder_btn = button("Open mods folder")
-        folder_btn.clicked.connect(lambda: self.open_path(self.active_root.mods_dir))
-        controls.addWidget(folder_btn)
-        refresh_btn = button("Refresh", compact=True)
-        refresh_btn.clicked.connect(self.refresh_all)
-        controls.addWidget(refresh_btn)
-        controls.addStretch(1)
-        intro_layout.addLayout(controls)
-        layout.addWidget(intro)
-        download_panel, download_layout = panel("Download a mod archive", "Use a direct HTTPS URL to a ZIP/TAR archive from a trusted source. Native mods can execute code on your computer.")
-        download_row = QHBoxLayout()
+        choose = make_button("＋ Import archive", "primary")
+        choose.clicked.connect(self.choose_mod)
+        row.addWidget(choose)
+        openfolder = make_button("Open mods folder", "secondary")
+        openfolder.clicked.connect(lambda: self.open_path(self.root.mods_dir))
+        row.addWidget(openfolder)
+        layout.addLayout(row)
+        urlrow = QHBoxLayout()
         self.mod_url_input = QLineEdit()
-        self.mod_url_input.setPlaceholderText("https://example.com/mod.zip")
-        download_row.addWidget(self.mod_url_input, 1)
-        download_button = button("Download & install", primary=True)
-        download_button.clicked.connect(self.download_mod_url)
-        download_row.addWidget(download_button)
-        download_layout.addLayout(download_row)
-        layout.addWidget(download_panel)
-        mods_panel, mods_layout = panel("INSTALLED MOD FOLDERS")
+        self.mod_url_input.setPlaceholderText("Direct HTTPS ZIP/TAR mod archive URL")
+        urlrow.addWidget(self.mod_url_input, 1)
+        download = make_button("Download & install", "soft")
+        download.clicked.connect(self.download_mod_url)
+        urlrow.addWidget(download)
+        layout.addLayout(urlrow)
+        root.addWidget(panel)
+        modpanel, modlayout = make_panel("Installed mod folders")
         self.mods_list = QListWidget()
         self.mods_list.setMinimumHeight(300)
-        mods_layout.addWidget(self.mods_list)
-        mod_buttons = QHBoxLayout()
-        toggle_btn = button("Enable / disable selected", compact=True)
-        toggle_btn.clicked.connect(self.toggle_selected_mod)
-        mod_buttons.addWidget(toggle_btn)
-        mod_buttons.addStretch(1)
-        mods_layout.addLayout(mod_buttons)
-        layout.addWidget(mods_panel, 1)
-        note = QLabel("The MCPelauncher compatibility/update component is protected from being disabled here. Mod support depends on the exact game and launcher versions.")
-        note.setObjectName("muted")
-        note.setWordWrap(True)
-        layout.addWidget(note)
-        return self._scroll_page(body)
+        modlayout.addWidget(self.mods_list)
+        toggle = make_button("Enable / disable selected", "secondary")
+        toggle.clicked.connect(self.toggle_selected_mod)
+        modlayout.addWidget(toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+        root.addWidget(modpanel, 1)
+        return self.scroll_page(body)
 
-    def _make_worlds_page(self) -> QWidget:
+    def build_discover(self) -> QWidget:
         body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 0, 8)
-        layout.setSpacing(16)
-        intro, intro_layout = panel("World safety", "Fresh MCPE can automatically snapshot changed world folders before you launch a game. Backups are saved under Documents/Fresh MCPE Backups. Close Minecraft before requesting manual backups or restoring a world.")
-        buttons = QHBoxLayout()
-        backup_btn = button("Create backup now", primary=True)
-        backup_btn.clicked.connect(lambda: self.start_backup(manual=True))
-        buttons.addWidget(backup_btn)
-        open_btn = button("Open world folder")
-        open_btn.clicked.connect(lambda: self.open_path(self.active_root.game_dir / "minecraftWorlds"))
-        buttons.addWidget(open_btn)
-        refresh_btn = button("Refresh", compact=True)
-        refresh_btn.clicked.connect(self.refresh_all)
-        buttons.addWidget(refresh_btn)
-        buttons.addStretch(1)
-        intro_layout.addLayout(buttons)
-        layout.addWidget(intro)
-        worlds_panel, worlds_layout = panel("DETECTED WORLDS")
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 6)
+        panel, layout = make_panel("Discover Bedrock add-ons", "Use a direct download link from a trusted Bedrock add-on source. Regular web-page URLs are not direct downloads.")
+        row = QHBoxLayout()
+        self.discover_url = QLineEdit()
+        self.discover_url.setPlaceholderText("Paste direct HTTPS add-on URL")
+        row.addWidget(self.discover_url, 1)
+        install = make_button("Download & install", "primary", 40)
+        install.clicked.connect(self.install_discover_url)
+        row.addWidget(install)
+        layout.addLayout(row)
+        root.addWidget(panel)
+        grid = QGridLayout()
+        for i, (tag, name, desc, url) in enumerate([
+            ("COMMUNITY", "MCPEDL", "Community maps, resource packs and behavior packs.", "https://mcpedl.com/"),
+            ("OFFICIAL", "Minecraft Marketplace", "Official Bedrock content and Marketplace updates.", "https://www.minecraft.net/en-us/marketplace"),
+            ("PROJECT", "Fresh MCPE", "Report bugs and follow the launcher development.", GITHUB_URL),
+        ]):
+            card, cv = make_panel(name, desc, "featureCard")
+            flag = QLabel(tag)
+            flag.setObjectName("eyebrow")
+            cv.addWidget(flag)
+            openbutton = make_button("Open site ↗", "soft")
+            openbutton.clicked.connect(lambda _checked=False, dest=url: QDesktopServices.openUrl(QUrl(dest)))
+            cv.addWidget(openbutton)
+            grid.addWidget(card, 0, i)
+        root.addLayout(grid)
+        recent, recent_layout = make_panel("Installed add-ons")
+        self.discover_list = QListWidget()
+        self.discover_list.setMinimumHeight(260)
+        recent_layout.addWidget(self.discover_list)
+        root.addWidget(recent, 1)
+        return self.scroll_page(body)
+
+    def build_worlds(self) -> QWidget:
+        body = QWidget()
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 6)
+        intro, layout = make_panel("Worlds & backups", "Worlds are kept in Fresh MCPE's isolated data directory. Backups are saved under Documents/Fresh MCPE Backups.")
+        row = QHBoxLayout()
+        backup = make_button("Create backup now", "primary", 40)
+        backup.clicked.connect(lambda: self.start_backup(manual=True))
+        row.addWidget(backup)
+        folder = make_button("Open worlds folder", "secondary", 40)
+        folder.clicked.connect(lambda: self.open_path(self.root.game_dir / "minecraftWorlds"))
+        row.addWidget(folder)
+        layout.addLayout(row)
+        root.addWidget(intro)
+        worldspanel, wlayout = make_panel("Worlds in Fresh MCPE")
         self.worlds_list = QListWidget()
-        self.worlds_list.setMinimumHeight(170)
-        worlds_layout.addWidget(self.worlds_list)
-        layout.addWidget(worlds_panel)
-        backup_panel, backup_layout = panel("SAVED BACKUPS")
+        self.worlds_list.setMinimumHeight(155)
+        wlayout.addWidget(self.worlds_list)
+        root.addWidget(worldspanel)
+        bpanel, blayout = make_panel("Saved snapshots")
         self.backups_list = QListWidget()
-        self.backups_list.setMinimumHeight(180)
-        backup_layout.addWidget(self.backups_list)
-        restore_row = QHBoxLayout()
-        restore_btn = button("Restore selected backup")
-        restore_btn.clicked.connect(self.restore_selected_backup)
-        restore_row.addWidget(restore_btn)
-        restore_row.addStretch(1)
-        backup_layout.addLayout(restore_row)
-        layout.addWidget(backup_panel)
-        warn = QLabel("Restoring replaces the selected install's current world folder. Fresh MCPE makes an extra safety copy first. Keep another copy of worlds you cannot afford to lose.")
-        warn.setObjectName("warningText")
-        warn.setWordWrap(True)
-        layout.addWidget(warn)
-        return self._scroll_page(body)
+        self.backups_list.setMinimumHeight(190)
+        blayout.addWidget(self.backups_list)
+        restore = make_button("Restore selected backup", "secondary")
+        restore.clicked.connect(self.restore_selected_backup)
+        blayout.addWidget(restore, alignment=Qt.AlignmentFlag.AlignLeft)
+        root.addWidget(bpanel)
+        note = QLabel("Close Minecraft before manual backup or restore. Restore creates a separate safety copy of current worlds first.")
+        note.setObjectName("warningText")
+        note.setWordWrap(True)
+        root.addWidget(note)
+        return self.scroll_page(body)
 
-    def _make_settings_page(self) -> QWidget:
+    def build_settings(self) -> QWidget:
         body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 0, 8)
-        layout.setSpacing(16)
-        runtime_panel, runtime_layout = panel("Runtime & sign-in", "Use MCPelauncher's own account sign-in and version download interface. Fresh MCPE never asks you to type your Microsoft or Google password into this app.")
-        login_btn = button("Open official MCPelauncher sign-in", primary=True)
-        login_btn.clicked.connect(self.open_native_launcher)
-        runtime_layout.addWidget(login_btn)
-        docs_btn = button("Official MCPelauncher documentation ↗")
-        docs_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(OFFICIAL_GUIDE)))
-        runtime_layout.addWidget(docs_btn)
-        layout.addWidget(runtime_panel)
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 0, 6)
+        runtime, runtime_layout = make_panel("Fresh MCPE runtime", "The runtime is built into Fresh MCPE's private directory; the system MCPelauncher .deb and Flatpak are not dependencies.")
+        path = QLabel(str(RUNTIME_ROOT))
+        path.setObjectName("pathLabel")
+        path.setWordWrap(True)
+        runtime_layout.addWidget(path)
+        self.runtime_detail = QLabel("Checking private runtime...")
+        self.runtime_detail.setObjectName("muted")
+        self.runtime_detail.setWordWrap(True)
+        runtime_layout.addWidget(self.runtime_detail)
+        row = QHBoxLayout()
+        build = make_button("Build / repair runtime", "primary", 40)
+        build.clicked.connect(self.build_runtime_help)
+        row.addWidget(build)
+        login = make_button("Sign in / install game versions", "secondary", 40)
+        login.clicked.connect(self.open_runtime_ui)
+        row.addWidget(login)
+        runtime_layout.addLayout(row)
+        root.addWidget(runtime)
 
-        setup_panel, setup_layout = panel("Storage & backups")
-        root_row = QHBoxLayout()
-        root_label = QLabel("Active MCPelauncher data folder")
-        root_label.setMinimumWidth(220)
-        root_row.addWidget(root_label)
-        self.root_combo = QComboBox()
-        self.root_combo.setMinimumHeight(38)
-        self.root_combo.currentIndexChanged.connect(self.change_active_root)
-        root_row.addWidget(self.root_combo, 1)
-        setup_layout.addLayout(root_row)
-        self.auto_backup_check = QCheckBox("Automatically back up changed worlds before launching")
-        self.auto_backup_check.toggled.connect(self.change_auto_backup)
-        setup_layout.addWidget(self.auto_backup_check)
-        retention_row = QHBoxLayout()
-        retention_row.addWidget(QLabel("Keep recent automatic backups"))
-        self.retention_combo = QComboBox()
+        options, opt_layout = make_panel("Storage and performance")
+        self.auto_backup = QCheckBox("Automatically back up changed worlds before launching")
+        self.auto_backup.toggled.connect(self.change_auto_backup)
+        opt_layout.addWidget(self.auto_backup)
+        self.gamemode = QCheckBox("Use Linux GameMode when installed")
+        self.gamemode.toggled.connect(self.change_gamemode)
+        opt_layout.addWidget(self.gamemode)
+        retain = QHBoxLayout()
+        retain.addWidget(QLabel("Keep recent automatic snapshots"))
+        self.retention = QComboBox()
         for count in (3, 5, 10, 20):
-            self.retention_combo.addItem(f"{count} snapshots", count)
-        self.retention_combo.currentIndexChanged.connect(self.change_retention)
-        retention_row.addWidget(self.retention_combo)
-        retention_row.addStretch(1)
-        setup_layout.addLayout(retention_row)
-        path_buttons = QHBoxLayout()
-        open_data_btn = button("Open data folder", compact=True)
-        open_data_btn.clicked.connect(lambda: self.open_path(self.active_root.path))
-        path_buttons.addWidget(open_data_btn)
-        open_backups_btn = button("Open backups", compact=True)
-        open_backups_btn.clicked.connect(lambda: self.open_path(BACKUP_DIR))
-        path_buttons.addWidget(open_backups_btn)
-        path_buttons.addStretch(1)
-        setup_layout.addLayout(path_buttons)
-        layout.addWidget(setup_panel)
+            self.retention.addItem(f"{count} backups", count)
+        self.retention.currentIndexChanged.connect(self.change_retention)
+        retain.addWidget(self.retention)
+        retain.addStretch(1)
+        opt_layout.addLayout(retain)
+        paths = QHBoxLayout()
+        data = make_button("Open Fresh MCPE data", "secondary")
+        data.clicked.connect(lambda: self.open_path(NATIVE_ROOT))
+        paths.addWidget(data)
+        backups = make_button("Open backups", "secondary")
+        backups.clicked.connect(lambda: self.open_path(BACKUP_DIR))
+        paths.addWidget(backups)
+        paths.addStretch(1)
+        opt_layout.addLayout(paths)
+        root.addWidget(options)
 
-        performance_panel, performance_layout = panel("Performance options", "Keep the launcher lightweight while giving Linux GameMode an opportunity to tune system performance, if it is installed.")
-        self.gamemode_check = QCheckBox("Use GameMode for game launches when available")
-        self.gamemode_check.toggled.connect(self.change_gamemode)
-        performance_layout.addWidget(self.gamemode_check)
-        self.performance_status = QLabel("")
-        self.performance_status.setObjectName("muted")
-        self.performance_status.setWordWrap(True)
-        performance_layout.addWidget(self.performance_status)
-        performance_hint = QLabel("GameMode is optional. Install it with: sudo apt install gamemode. This does not set the in-game FPS cap; set that in Minecraft Video settings.")
-        performance_hint.setObjectName("muted")
-        performance_hint.setWordWrap(True)
-        performance_layout.addWidget(performance_hint)
-        layout.addWidget(performance_panel)
+        account, acc_layout = make_panel("Account and privacy")
+        message = QLabel("Sign-in uses the version manager that is built from source into Fresh MCPE. Fresh MCPE does not ask you to paste Microsoft or Google passwords into its own fields.")
+        message.setObjectName("muted")
+        message.setWordWrap(True)
+        acc_layout.addWidget(message)
+        repo = make_button("Fresh MCPE on GitHub ↗", "soft")
+        repo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))
+        acc_layout.addWidget(repo)
+        root.addWidget(account)
+        root.addStretch(1)
+        return self.scroll_page(body)
 
-        about, about_layout = panel("About Fresh MCPE")
-        about_text = QLabel("Fresh MCPE is an independent interface for the existing MCPelauncher runtime. It does not include Minecraft, bypass ownership checks, modify authentication tokens, or promise compatibility with every Bedrock release. A launcher UI can manage files, but it cannot repair an incompatible native game library by itself.")
-        about_text.setObjectName("muted")
-        about_text.setWordWrap(True)
-        about_layout.addWidget(about_text)
-        repo_btn = button("Fresh MCPE on GitHub ↗")
-        repo_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))
-        about_layout.addWidget(repo_btn)
-        layout.addWidget(about)
-        return self._scroll_page(body)
+    def build_news(self) -> None:
+        entries = [
+            ("SEP 28, 2026", "Grinding & Galaxy", "New on Java Realms", "✧", "#30244b"),
+            ("AUG 28, 2026", "Mischiefs & Secrets", "New on Java Realms", "♜", "#3c2c4a"),
+            ("JUL 29, 2026", "9 fun Realms maps", "Are you ready?", "▧", "#2d493a"),
+            ("JUN 26, 2026", "Dash and Unwind", "New on Java Realms", "ϟ", "#493051"),
+        ]
+        while self.news_cards.count():
+            item = self.news_cards.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for date, title, subtitle, glyph, color in entries:
+            card = QFrame()
+            card.setObjectName("newsCard")
+            layout = QVBoxLayout(card)
+            layout.setContentsMargins(8, 8, 8, 9)
+            layout.setSpacing(4)
+            art = QLabel(glyph)
+            art.setObjectName("newsArt")
+            art.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            art.setMinimumHeight(62)
+            art.setStyleSheet(f"QLabel#newsArt {{ background: {color}; color: #f0dcff; border-radius: 7px; font-size: 28px; font-weight: 900; }}")
+            layout.addWidget(art)
+            date_label = QLabel(date)
+            date_label.setObjectName("newsDate")
+            layout.addWidget(date_label)
+            title_label = QLabel(title)
+            title_label.setObjectName("newsItemTitle")
+            title_label.setWordWrap(True)
+            layout.addWidget(title_label)
+            sub = QLabel(subtitle)
+            sub.setObjectName("mutedSmall")
+            layout.addWidget(sub)
+            card.mousePressEvent = lambda _event: QDesktopServices.openUrl(QUrl("https://www.minecraft.net/en-us/realms/realms-stories"))
+            self.news_cards.addWidget(card)
 
-    def navigate(self, name: str) -> None:
-        if name not in self._pages:
+    def refresh_news(self) -> None:
+        self.notice("News", "The starter rail uses the headlines in your design brief. Live news integration is a future task; these cards are not a live news feed yet.")
+
+    def navigate(self, page: str) -> None:
+        if page not in self.pages:
             return
-        self.page_title.setText(name)
-        self.stack.setCurrentWidget(self._pages[name])
-        for nav_name, nav in self._nav_buttons.items():
-            nav.setChecked(nav_name == name)
+        self.stack.setCurrentWidget(self.pages[page])
+        for key, button in self.nav.items():
+            button.setChecked(key == page)
         self.refresh_runtime_status()
 
-    def _sync_selected_version(self, source: QComboBox, target: QComboBox | None) -> None:
-        if self._refreshing:
+    def selected_version(self) -> InstalledVersion | None:
+        return self.version_combo.currentData() if hasattr(self, "version_combo") else None
+
+    def on_version_changed(self, _index: int = -1) -> None:
+        if self.refreshing:
             return
-        selected = source.currentData()
-        if selected is not None:
-            self.settings["selected_root"] = selected.root_key
+        selected = self.selected_version()
+        if selected:
             self.settings["selected_version"] = selected.name
             save_settings(self.settings)
-            if target is not None:
-                for index in range(target.count()):
-                    candidate = target.itemData(index)
-                    if candidate and candidate.name == selected.name and candidate.root_key == selected.root_key:
-                        self._refreshing = True
-                        target.setCurrentIndex(index)
-                        self._refreshing = False
-                        break
-            self.version_hint.setText(f"{selected.name} · {selected.root_label}")
-        self._update_launch_controls()
+        self.sync_version_combos()
 
-    def _update_launch_controls(self) -> None:
-        available = self.home_version_combo.currentData() is not None
-        self.home_launch.setEnabled(available)
-        self.version_hint.setText("No installed versions detected. Open MCPelauncher to sign in or install a supported version." if not available else self.version_hint.text())
+    def on_instance_changed(self, _index: int = -1) -> None:
+        if self.refreshing:
+            return
+        selected = self.instances_combo.currentData()
+        if selected:
+            self.version_combo.blockSignals(True)
+            idx = self.version_combo.findData(selected)
+            self.version_combo.setCurrentIndex(idx)
+            self.version_combo.blockSignals(False)
+            self.settings["selected_version"] = selected.name
+            save_settings(self.settings)
 
-    def refresh_runtime_status(self) -> None:
-        native_client = shutil.which("mcpelauncher-client")
-        native_ui = shutil.which("mcpelauncher-ui-qt")
-        flatpak = shutil.which("flatpak")
-        installed = bool(native_client or native_ui)
-        if flatpak:
-            try:
-                check = subprocess.run(
-                    [flatpak, "info", "io.mrarm.mcpelauncher"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2, check=False,
-                )
-                installed = installed or check.returncode == 0
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-        if native_client:
-            self.runtime_status.setText("●  Native MCPelauncher found")
-            self.header_status.setText("●  RUNTIME FOUND")
-        elif installed:
-            self.runtime_status.setText("●  MCPelauncher UI found; direct client not detected")
-            self.header_status.setText("●  PARTIAL")
-        else:
-            self.runtime_status.setText("○  MCPelauncher not detected")
-            self.header_status.setText("○  SETUP NEEDED")
+    def sync_version_combos(self) -> None:
+        if not hasattr(self, "instances_combo"):
+            return
+        selected = self.selected_version()
+        self.instances_combo.blockSignals(True)
+        self.instances_combo.setCurrentIndex(self.instances_combo.findData(selected))
+        self.instances_combo.blockSignals(False)
 
     def refresh_all(self) -> None:
         self.roots = discover_data_roots()
-        self.active_root = find_root(self.roots, str(self.settings.get("active_root", "native")))
-        versions = discover_versions(self.roots)
-        self._refreshing = True
-        for combo in (self.home_version_combo, self.versions_combo):
+        self.root = find_root(self.roots, "native")
+        self.versions = discover_versions(self.roots)
+        self.refreshing = True
+        for combo in (self.version_combo, self.instances_combo):
             combo.blockSignals(True)
             combo.clear()
-            for version in versions:
-                combo.addItem(f"{version.name}   ·   {version.root_label}", version)
-            selected_index = -1
-            for index, version in enumerate(versions):
-                if version.root_key == self.settings.get("selected_root") and version.name == self.settings.get("selected_version"):
-                    selected_index = index
-                    break
-            if selected_index < 0:
-                for index, version in enumerate(versions):
-                    if version.root_key == self.active_root.key:
-                        selected_index = index
-                        break
-            if selected_index < 0 and versions:
-                selected_index = 0
-            combo.setCurrentIndex(selected_index)
+            for version in self.versions:
+                combo.addItem(f"{version.name}  ·  Bedrock", version)
+            index = next((i for i, version in enumerate(self.versions) if version.name == self.settings.get("selected_version")), 0 if self.versions else -1)
+            combo.setCurrentIndex(index)
             combo.blockSignals(False)
-        # Keep persisted active root options visible even when a data folder is empty.
-        root_options = [
-            DataRoot("native", "Linux install", NATIVE_ROOT, "native"),
-            DataRoot("flatpak", "Flatpak install", FLATPAK_ROOT, "flatpak"),
-        ]
-        self.root_combo.blockSignals(True)
-        self.root_combo.clear()
-        for root in root_options:
-            self.root_combo.addItem(f"{root.label} — {root.path}", root.key)
-        root_idx = self.root_combo.findData(self.active_root.key)
-        self.root_combo.setCurrentIndex(max(0, root_idx))
-        self.root_combo.blockSignals(False)
-        self.auto_backup_check.blockSignals(True)
-        self.auto_backup_check.setChecked(bool(self.settings.get("auto_backup", True)))
-        self.auto_backup_check.blockSignals(False)
-        self.gamemode_check.blockSignals(True)
-        self.gamemode_check.setChecked(bool(self.settings.get("performance_mode", True)))
-        self.gamemode_check.blockSignals(False)
-        if shutil.which("gamemoderun"):
-            self.performance_status.setText("GameMode detected. Fresh MCPE will use it when this option is enabled.")
-        else:
-            self.performance_status.setText("GameMode is not installed. Fresh MCPE will launch normally; the optional integration stays idle.")
-        self.retention_combo.blockSignals(True)
-        retention_idx = self.retention_combo.findData(int(self.settings.get("backup_retention", 5)))
-        self.retention_combo.setCurrentIndex(max(0, retention_idx))
-        self.retention_combo.blockSignals(False)
-        self._refreshing = False
-
-        self.home_versions_list.clear()
-        self.versions_list.clear()
-        for version in versions:
-            text = f"{version.name}    ·    {version.root_label}\n{version.path}"
-            self.home_versions_list.addItem(text)
-            self.versions_list.addItem(text)
-        if not versions:
-            self.home_versions_list.addItem("No versions found. Use MCPelauncher to sign in and install a supported Bedrock version.")
-            self.versions_list.addItem("No installed versions found.")
-        self._refresh_addons()
-        self._refresh_mods()
-        self._refresh_worlds()
-        self._refresh_backups()
-        packs = list_installed_packs(self.active_root.game_dir)
-        self.metric_values["versions"].setText(str(len(versions)))
-        self.metric_values["packs"].setText(str(len(packs)))
-        self.metric_values["mods"].setText(str(len(list_mod_folders(self.active_root.mods_dir))))
-        self.metric_values["worlds"].setText(str(len(self._get_world_rows())))
-        selected = self.home_version_combo.currentData()
-        self.version_hint.setText("No installed versions detected. Open MCPelauncher to sign in or install a supported version." if selected is None else f"{selected.name} · {selected.root_label}")
-        self._update_launch_controls()
+        self.refreshing = False
+        while self.quick_row.count():
+            item = self.quick_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for i in range(4):
+            if i < len(self.versions):
+                version = self.versions[i]
+                label = version.name if len(version.name) < 7 else version.name[-5:]
+                button = QPushButton(label)
+                button.setObjectName("quickChip")
+                button.setFixedSize(51, 51)
+                button.setToolTip(f"Launch Bedrock {version.name}")
+                button.clicked.connect(lambda _checked=False, item=version: self.launch_version(item))
+            else:
+                button = QPushButton("·")
+                button.setObjectName("quickChipEmpty")
+                button.setFixedSize(51, 51)
+                button.setEnabled(False)
+            self.quick_row.addWidget(button)
+        plus = QPushButton("+")
+        plus.setObjectName("quickChipAdd")
+        plus.setFixedSize(51, 51)
+        plus.setToolTip("Add a Bedrock version")
+        plus.clicked.connect(self.open_runtime_ui)
+        self.quick_row.addWidget(plus)
+        self.quick_row.addStretch(1)
+        self.instances_list.clear()
+        for version in self.versions:
+            row = QListWidgetItem(f"▦  {version.name}\n{version.path}")
+            row.setData(Qt.ItemDataRole.UserRole, version)
+            self.instances_list.addItem(row)
+        if not self.versions:
+            self.instances_list.addItem("No versions installed in Fresh MCPE yet. Click + to sign in and install one.")
+        self.refresh_addons()
+        self.refresh_mods()
+        self.refresh_worlds()
+        self.refresh_backups()
+        self.refresh_servers()
+        self.refresh_playtime()
         self.refresh_runtime_status()
+        self.auto_backup.blockSignals(True)
+        self.auto_backup.setChecked(bool(self.settings.get("auto_backup", True)))
+        self.auto_backup.blockSignals(False)
+        self.gamemode.blockSignals(True)
+        self.gamemode.setChecked(bool(self.settings.get("performance_mode", True)))
+        self.gamemode.blockSignals(False)
+        self.retention.blockSignals(True)
+        self.retention.setCurrentIndex(max(0, self.retention.findData(int(self.settings.get("backup_retention", 5)))))
+        self.retention.blockSignals(False)
 
-    def _refresh_addons(self) -> None:
-        self.addons_list.clear()
-        packs = list_installed_packs(self.active_root.game_dir)
-        for pack in packs:
-            item = QListWidgetItem(f"{'◇' if pack.kind == 'Resource pack' else '⬡'}  {pack.name}   ·   v{pack.version}\n{pack.kind}  •  {pack.path}")
-            item.setData(Qt.ItemDataRole.UserRole, pack)
-            self.addons_list.addItem(item)
-        if not packs:
-            self.addons_list.addItem("No add-ons found for this data folder yet. Import a .mcpack or .mcaddon above.")
+    def refresh_addons(self) -> None:
+        packs = list_installed_packs(self.root.game_dir)
+        for key in ("addons_list", "discover_list"):
+            view = getattr(self, key, None)
+            if view is None:
+                continue
+            view.clear()
+            for pack in packs:
+                item = QListWidgetItem(f"{'◇' if pack.kind == 'Resource pack' else '⬡'}  {pack.name}  ·  v{pack.version}\n{pack.kind}  •  {pack.path}")
+                item.setData(Qt.ItemDataRole.UserRole, pack)
+                view.addItem(item)
+            if not packs:
+                view.addItem("No Bedrock packs installed in this Fresh MCPE instance yet.")
 
-    def _refresh_mods(self) -> None:
-        self.mods_list.clear()
-        folders = list_mod_folders(self.active_root.mods_dir)
-        for folder in folders:
+    def refresh_mods(self) -> None:
+        view = getattr(self, "mods_list", None)
+        if view is None:
+            return
+        view.clear()
+        for folder in list_mod_folders(self.root.mods_dir):
             disabled = folder.name.endswith(".disabled")
             protected = folder.name == "mcpelauncher-updates"
-            status = "PROTECTED" if protected else ("DISABLED" if disabled else "ENABLED")
+            status = "PROTECTED RUNTIME" if protected else ("DISABLED" if disabled else "ENABLED")
             item = QListWidgetItem(f"{'●' if not disabled else '○'}  {folder.name}\n{status}  •  {folder}")
             item.setData(Qt.ItemDataRole.UserRole, folder)
-            self.mods_list.addItem(item)
-        if not folders:
-            self.mods_list.addItem("No mod folders found.")
+            view.addItem(item)
+        if not view.count():
+            view.addItem("No custom native mod folders.")
 
-    def _get_world_rows(self) -> list[tuple[str, Path, str]]:
-        worlds: list[tuple[str, Path, str]] = []
-        for root in self.roots:
-            folder = root.game_dir / "minecraftWorlds"
-            if not folder.is_dir():
-                continue
-            try:
-                children = [p for p in folder.iterdir() if p.is_dir()]
-            except OSError:
-                continue
-            for child in children:
-                label = child.name
-                level_name = child / "levelname.txt"
+    def refresh_worlds(self) -> None:
+        view = getattr(self, "worlds_list", None)
+        if view is None:
+            return
+        view.clear()
+        worlds = self.root.game_dir / "minecraftWorlds"
+        if worlds.is_dir():
+            for folder in sorted((p for p in worlds.iterdir() if p.is_dir()), key=lambda p: p.name.casefold()):
+                name = folder.name
                 try:
-                    if level_name.is_file():
-                        label = level_name.read_text(encoding="utf-8", errors="replace").strip() or label
+                    file = folder / "levelname.txt"
+                    if file.is_file():
+                        name = file.read_text(encoding="utf-8", errors="replace").strip() or name
                 except OSError:
                     pass
-                worlds.append((label, child, root.label))
-        return worlds
+                item = QListWidgetItem(f"▣  {name}\n{folder}")
+                item.setData(Qt.ItemDataRole.UserRole, folder)
+                view.addItem(item)
+        if not view.count():
+            view.addItem("No worlds in Fresh MCPE yet. Existing worlds can be copied into this folder.")
 
-    def _refresh_worlds(self) -> None:
-        self.worlds_list.clear()
-        worlds = self._get_world_rows()
-        for name, path, root_label in worlds:
-            item = QListWidgetItem(f"▣  {name}\n{root_label}  •  {path}")
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            self.worlds_list.addItem(item)
-        if not worlds:
-            self.worlds_list.addItem("No world folders detected yet.")
+    def refresh_backups(self) -> None:
+        view = getattr(self, "backups_list", None)
+        if view is None:
+            return
+        view.clear()
+        for folder, meta in list_backups(BACKUP_DIR):
+            item = QListWidgetItem(f"◷  {meta.get('root_label', 'Fresh MCPE')}  ·  {meta.get('created', folder.name)}\n{meta.get('file_count', '?')} files  •  {fmt_bytes(int(meta.get('total_bytes', 0) or 0))}\n{folder}")
+            item.setData(Qt.ItemDataRole.UserRole, folder)
+            view.addItem(item)
+        if not view.count():
+            view.addItem("No snapshots yet.")
 
-    def _refresh_backups(self) -> None:
-        self.backups_list.clear()
-        for snapshot, meta in list_backups(BACKUP_DIR):
-            created = meta.get("created", snapshot.name)
-            count = meta.get("file_count", "?")
-            size = format_bytes(int(meta.get("total_bytes", 0) or 0))
-            row = QListWidgetItem(f"◷  {meta.get('root_label', meta.get('root_key', 'Install'))}  ·  {created}\n{count} files  •  {size}  •  {snapshot}")
-            row.setData(Qt.ItemDataRole.UserRole, snapshot)
-            self.backups_list.addItem(row)
-        if self.backups_list.count() == 0:
-            self.backups_list.addItem("No backups yet. Create one now or enable automatic backups in Settings.")
+    def refresh_servers(self) -> None:
+        if not hasattr(self, "server_list"):
+            return
+        self.server_list.clear()
+        path = CONFIG_DIR / "servers.json"
+        try:
+            servers = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(servers, list):
+                servers = []
+        except (OSError, json.JSONDecodeError):
+            servers = []
+        for server in servers:
+            if not isinstance(server, dict):
+                continue
+            self.server_list.addItem(f"●  {server.get('name', 'Server')}   ·   {server.get('address', '')}:{server.get('port', 19132)}")
+        if not servers:
+            self.server_list.addItem("No servers saved. Click + Add to create a favourite.")
 
-    def _start_task(self, task: Callable[[], object], success: Callable[[object], None], failure: Callable[[str], None] | None = None) -> None:
-        if self._worker is not None and self._worker.isRunning():
-            QMessageBox.information(self, APP_NAME, "Another file operation is already running. Please let it finish first.")
+    def refresh_playtime(self) -> None:
+        try:
+            data = json.loads((CONFIG_DIR / "playtime.json").read_text(encoding="utf-8"))
+            seconds = max(0, int(data.get("total_seconds", 0)))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            seconds = 0
+        hours, remainder = divmod(seconds, 3600)
+        self.playtime_value.setText(f"{hours}h {remainder // 60:02d}m")
+
+    def start_task(self, task: Callable[[], object], success: Callable[[object], None], failure: Callable[[str], None] | None = None) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            self.notice("Working", "Another file operation is still running.")
             return
         worker = Worker(task)
-        self._worker = worker
+        self.worker = worker
         worker.succeeded.connect(success)
-        worker.failed.connect(failure or self._show_error)
-        worker.finished.connect(lambda: setattr(self, "_worker", None))
-        self.header_status.setText("◌  WORKING")
+        worker.failed.connect(failure or self.show_error)
+        worker.finished.connect(lambda: setattr(self, "worker", None))
+        self.runtime_badge.setText("WORKING…")
         worker.start()
 
-    def _show_error(self, message: str) -> None:
-        self.header_status.setText("●  READY")
-        QMessageBox.critical(self, f"{APP_NAME} — operation failed", message)
+    def show_error(self, message: str) -> None:
+        self.runtime_badge.setText("RUNTIME READY")
+        self.notice("Operation failed", message)
         self.refresh_all()
 
-    def _finish_task(self) -> None:
-        self.header_status.setText("●  READY")
+    def finish_task(self) -> None:
+        self.runtime_badge.setText("RUNTIME READY")
         self.refresh_all()
 
-    def start_backup(self, manual: bool = False, next_step: Callable[[], None] | None = None) -> None:
-        self.header_status.setText("◌  BACKING UP")
-        roots = list(self.roots)
+    def backup(self, manual: bool = False, next_step: Callable[[], None] | None = None) -> None:
         previous = dict(self.settings.get("world_fingerprints", {}))
         retention = int(self.settings.get("backup_retention", 5))
-
+        roots = list(self.roots)
         def success(result: object) -> None:
             created, updated = result
             self.settings["world_fingerprints"] = updated
             save_settings(self.settings)
-            self._finish_task()
+            self.finish_task()
             if manual:
-                if created:
-                    QMessageBox.information(self, APP_NAME, f"Created {len(created)} backup snapshot(s).\n\nSaved in:\n{BACKUP_DIR}")
-                else:
-                    QMessageBox.information(self, APP_NAME, "No changed world data needed backing up. Existing world folders are unchanged since the last automatic snapshot.")
+                self.notice("Backup complete", f"Created {len(created)} snapshot(s).\n\n{BACKUP_DIR}" if created else "No Fresh MCPE worlds were found to back up.")
             if next_step:
                 next_step()
-
         def failure(message: str) -> None:
-            self.header_status.setText("●  READY")
-            if next_step:
-                answer = QMessageBox.question(
-                    self, "World backup failed",
-                    f"Fresh MCPE could not create a world backup:\n\n{message}\n\nLaunch the game anyway? It is safer to cancel if these worlds are important.",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if answer == QMessageBox.StandardButton.Yes:
-                    next_step()
-            else:
-                QMessageBox.critical(self, "Backup failed", message)
-
-        self._start_task(lambda: backup_changed_worlds(roots, BACKUP_DIR, previous, retention, force=manual), success, failure)
+            self.runtime_badge.setText("RUNTIME READY")
+            if next_step and QMessageBox.question(self, "Backup failed", f"Backup failed:\n\n{message}\n\nLaunch anyway?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                next_step()
+            elif not next_step:
+                self.notice("Backup failed", message)
+        self.start_task(lambda: backup_changed_worlds(roots, BACKUP_DIR, previous, retention, force=manual), success, failure)
 
     def launch_selected_version(self) -> None:
-        version = self.home_version_combo.currentData()
-        if version is None:
-            QMessageBox.information(self, APP_NAME, "No installed version was found. Open MCPelauncher to sign in and install a version first.")
+        version = self.selected_version()
+        if not version:
+            self.notice("No version installed", "Click + Add to sign in and install a Bedrock version into Fresh MCPE.")
             return
-        if version.name == "1.26.60.4":
-            answer = QMessageBox.warning(
-                self, "Known compatibility risk",
-                "Your earlier log for Bedrock 1.26.60.4 showed libpairipcore failing with __gnu_strerror_r. Fresh MCPE cannot repair that native binary mismatch.\n\nLaunch it anyway, or open MCPelauncher to look for a compatible version?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Open,
-            )
-            if answer == QMessageBox.StandardButton.Open:
-                self.open_native_launcher()
-                return
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-        if bool(self.settings.get("auto_backup", True)):
-            self.start_backup(manual=False, next_step=lambda: self._launch_version(version))
-        else:
-            self._launch_version(version)
+        self.launch_version(version)
 
-    def _launch_version(self, version: InstalledVersion) -> None:
-        client = shutil.which("mcpelauncher-client")
-        flatpak = shutil.which("flatpak")
-        if version.root_key == "flatpak":
-            if not flatpak:
-                QMessageBox.warning(self, APP_NAME, "Flatpak command was not found. This installation cannot be launched.")
-                return
-            command = [flatpak, "run", "--command=mcpelauncher-client", "io.mrarm.mcpelauncher", "-dg", str(version.path)]
-        elif client:
-            command = [client, "-dg", str(version.path)]
-        else:
-            QMessageBox.warning(
-                self, APP_NAME,
-                "The direct MCPelauncher client was not found on PATH. Try installing the native launcher packages, or open the original launcher UI.",
-            )
+    def launch_version(self, version: InstalledVersion) -> None:
+        client = runtime_executable("mcpelauncher-client")
+        if not client:
+            self.build_runtime_help()
             return
-        update_mod = find_compatibility_mod(version.root_path)
-        if update_mod is not None:
-            command.extend(["-m", str(update_mod)])
-        gamemoderun = shutil.which("gamemoderun")
-        if bool(self.settings.get("performance_mode", True)) and gamemoderun:
-            command.insert(0, gamemoderun)
+        env = runtime_env()
+        env["FRESH_MCPE_RUNTIME_ROOT"] = str(RUNTIME_ROOT)
+        env["FRESH_MCPE_DATA_ROOT"] = str(self.root.path)
+        command = [str(client), "-dg", str(version.path), "-m", str(self.root.mods_dir)]
+        compat = find_compatibility_mod(version.root_path)
+        if compat:
+            command = [str(client), "-dg", str(version.path), "-m", str(compat)]
+        gamemode = shutil.which("gamemoderun")
+        if self.settings.get("performance_mode", True) and gamemode:
+            command.insert(0, gamemode)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = LOG_DIR / f"bedrock-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+        def launch() -> None:
+            with log_path.open("w", encoding="utf-8") as log:
+                subprocess.Popen(command, cwd=str(version.path), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        if self.settings.get("auto_backup", True):
+            self.backup(manual=False, next_step=launch)
+        else:
+            try:
+                launch()
+                self.record_launch()
+                self.notice("Launching Bedrock", f"Started version {version.name} with Fresh MCPE's private runtime.\n\nCrash log:\n{log_path}")
+            except OSError as exc:
+                self.notice("Launch failed", str(exc))
+
+    def record_launch(self) -> None:
+        path = CONFIG_DIR / "playtime.json"
         try:
-            LOG_DIR.mkdir(parents=True, exist_ok=True)
-            log_path = LOG_DIR / f"launch-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-            log_handle = log_path.open("w", encoding="utf-8")
-            subprocess.Popen(
-                command,
-                cwd=str(version.path),
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                env=os.environ.copy(),
-            )
-            # Popen duplicates the file descriptor in the child.
-            log_handle.close()
-            self.header_status.setText("●  GAME STARTED")
-            QMessageBox.information(
-                self, APP_NAME,
-                f"Launch command started for Bedrock {version.name}.\n\nFresh MCPE will save the launcher output here:\n{log_path}\n\nIf the game crashes, attach that log when reporting the problem.",
-            )
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        data["launch_count"] = int(data.get("launch_count", 0)) + 1
+        data.setdefault("total_seconds", 0)
+        data["last_launch"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def open_runtime_ui(self) -> None:
+        ui = runtime_executable("mcpelauncher-ui-qt")
+        if not ui:
+            self.build_runtime_help()
+            return
+        try:
+            subprocess.Popen([str(ui)], env=runtime_env(), start_new_session=True)
+            self.notice("Fresh MCPE version manager", "This sign-in and download component was built into Fresh MCPE's own runtime. Game data is stored separately from other installs.")
         except OSError as exc:
-            QMessageBox.critical(self, "Could not launch Minecraft", str(exc))
-        self.refresh_runtime_status()
+            self.notice("Couldn't open version manager", str(exc))
 
-    def open_native_launcher(self) -> None:
-        ui = shutil.which("mcpelauncher-ui-qt")
-        flatpak = shutil.which("flatpak")
-        try:
-            if ui:
-                subprocess.Popen([ui], start_new_session=True)
-                return
-            if flatpak:
-                check = subprocess.run(
-                    [flatpak, "info", "io.mrarm.mcpelauncher"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3, check=False,
-                )
-                if check.returncode == 0:
-                    subprocess.Popen([flatpak, "run", "io.mrarm.mcpelauncher"], start_new_session=True)
-                    return
-        except (OSError, subprocess.SubprocessError) as exc:
-            QMessageBox.warning(self, APP_NAME, f"Could not open MCPelauncher:\n{exc}")
-            return
-        QMessageBox.warning(
-            self, APP_NAME,
-            "MCPelauncher UI was not found.\n\nUse the official installation guide to install the runtime and UI:\nhttps://minecraft-linux.github.io/",
-        )
+    def build_runtime_help(self) -> None:
+        self.notice("Build the private runtime", "Open Terminal in your Fresh-mcpe repository and run:\n\nbash runtime/build.sh\n\nThis builds the client and sign-in/version component from source into ~/.local/opt/fresh-mcpe/runtime. It does not install or launch the system MCPelauncher .deb or Flatpak. Build dependencies require disk space and use two jobs by default for lower-memory PCs.")
 
     def choose_addons(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, "Import Bedrock add-ons", str(Path.home() / "Downloads"),
-            "Bedrock add-ons (*.mcpack *.mcaddon *.zip);;All files (*)",
-        )
-        if not paths:
-            return
-        self._import_addon_paths([Path(path) for path in paths])
+        paths, _ = QFileDialog.getOpenFileNames(self, "Import Bedrock add-ons", str(Path.home() / "Downloads"), "Bedrock add-ons (*.mcpack *.mcaddon *.zip);;All files (*)")
+        if paths:
+            self.import_addon_paths([Path(p) for p in paths])
 
-    def _import_addon_paths(self, paths: list[Path]) -> None:
-        self.header_status.setText("◌  IMPORTING")
-        game_dir = self.active_root.game_dir
-
-        def task() -> list[InstalledPack]:
-            result: list[InstalledPack] = []
+    def import_addon_paths(self, paths: list[Path]) -> None:
+        def action() -> list[InstalledPack]:
+            installed: list[InstalledPack] = []
             for path in paths:
-                result.extend(import_addon(path, game_dir))
-            return result
-
+                installed.extend(import_addon(path, self.root.game_dir))
+            return installed
         def success(result: object) -> None:
-            packs = result
-            self._finish_task()
-            names = "\n".join(f"• {pack.name} — {pack.kind}" for pack in packs)
-            QMessageBox.information(self, "Add-on import complete", f"Installed {len(packs)} pack(s):\n\n{names}\n\nOpen Minecraft and activate the packs in the world's settings.")
-        self._start_task(task, success)
+            self.finish_task()
+            self.notice("Add-on import complete", "\n".join(f"{p.name} — {p.kind}" for p in result) + "\n\nActivate packs in world settings.")
+        self.start_task(action, success)
 
     def download_addon_url(self) -> None:
         url = self.addon_url_input.text().strip()
         if not url:
-            QMessageBox.information(self, APP_NAME, "Paste a direct HTTPS add-on download URL first.")
+            self.notice("Add-on URL needed", "Paste a direct HTTPS link to a .mcpack, .mcaddon or compatible ZIP.")
             return
-
         def success(result: object) -> None:
-            self._finish_task()
-            packs = result
+            self.finish_task()
             self.addon_url_input.clear()
-            names = "\n".join(f"• {pack.name} — {pack.kind}" for pack in packs)
-            QMessageBox.information(self, APP_NAME, f"Downloaded and installed {len(packs)} pack(s):\n\n{names}\n\nActivate the packs in the target world's settings.")
-        self._start_task(lambda: download_and_import_addon(url, self.active_root.game_dir), success)
+            self.notice("Download complete", "\n".join(f"{p.name} — {p.kind}" for p in result))
+        self.start_task(lambda: download_and_import_addon(url, self.root.game_dir), success)
+
+    def install_discover_url(self) -> None:
+        self.addon_url_input.setText(self.discover_url.text())
+        self.navigate("Add-ons")
+        self.download_addon_url()
 
     def remove_selected_addon(self) -> None:
         item = self.addons_list.currentItem()
         pack = item.data(Qt.ItemDataRole.UserRole) if item else None
         if not isinstance(pack, InstalledPack):
-            QMessageBox.information(self, APP_NAME, "Select an installed pack first.")
+            self.notice("Select a pack", "Select an installed Bedrock pack first.")
             return
-        answer = QMessageBox.question(
-            self, "Remove add-on",
-            f"Remove {pack.name} from this install?\n\nThis deletes its installed pack files but does not edit worlds that already reference it.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Remove pack", f"Remove {pack.name} from Fresh MCPE?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
             return
-
-        def success(_result: object) -> None:
-            self._finish_task()
-            QMessageBox.information(self, APP_NAME, f"Removed {pack.name}.")
-        self._start_task(lambda: safe_remove_pack(pack, self.active_root.game_dir), success)
+        self.start_task(lambda: safe_remove_pack(pack, self.root.game_dir), lambda _result: (self.finish_task(), self.notice("Pack removed", pack.name)))
 
     def choose_mod(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import launcher mod archive", str(Path.home() / "Downloads"),
-            "Mod archives (*.zip *.tar *.tar.gz *.tgz *.tar.xz);;All files (*)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Import native launcher mod", str(Path.home() / "Downloads"), "Mod archives (*.zip *.tar *.tar.gz *.tgz *.tar.xz);;All files (*)")
         if not path:
             return
-        answer = QMessageBox.warning(
-            self, "Trust the mod source",
-            "Launcher mods may contain native code that runs on your computer. Only install an archive from a source you trust.\n\nContinue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+        if QMessageBox.warning(self, "Trust this mod", "Native launcher mods can execute code on your computer. Continue only if you trust this source.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
             return
-        self._start_task(
-            lambda: import_mod_archive(Path(path), self.active_root.mods_dir),
-            lambda target: (self._finish_task(), QMessageBox.information(self, APP_NAME, f"Imported mod archive to:\n{target}")),
-        )
+        self.start_task(lambda: import_mod_archive(Path(path), self.root.mods_dir), lambda target: (self.finish_task(), self.notice("Mod imported", str(target))))
 
     def download_mod_url(self) -> None:
         url = self.mod_url_input.text().strip()
         if not url:
-            QMessageBox.information(self, APP_NAME, "Paste a direct HTTPS mod-archive URL first.")
+            self.notice("Mod URL needed", "Paste a direct HTTPS archive URL from a trusted source.")
             return
-        answer = QMessageBox.warning(
-            self, "Trust the mod source",
-            "Native launcher mods can execute code on your computer. Only continue if you trust the source and the exact archive URL.\n\nDownload and install this mod?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+        if QMessageBox.warning(self, "Trust this mod", "Native launcher mods can execute code on this computer. Download only if you trust the archive.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
             return
         def success(target: object) -> None:
-            self._finish_task()
+            self.finish_task()
             self.mod_url_input.clear()
-            QMessageBox.information(self, APP_NAME, f"Downloaded and installed mod archive to:\n{target}")
-        self._start_task(lambda: download_and_import_mod(url, self.active_root.mods_dir), success)
+            self.notice("Mod installed", str(target))
+        self.start_task(lambda: download_and_import_mod(url, self.root.mods_dir), success)
 
     def toggle_selected_mod(self) -> None:
         item = self.mods_list.currentItem()
-        path = item.data(Qt.ItemDataRole.UserRole) if item else None
-        if not isinstance(path, Path):
-            QMessageBox.information(self, APP_NAME, "Select a custom mod folder first.")
+        folder = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not isinstance(folder, Path):
+            self.notice("Select a mod", "Choose a custom mod folder first.")
             return
-        enabled = path.name.endswith(".disabled")
-        if path.name == "mcpelauncher-updates":
-            QMessageBox.information(self, APP_NAME, "The MCPelauncher compatibility/update mod is protected.")
+        disabled = folder.name.endswith(".disabled")
+        if QMessageBox.question(self, "Change mod state", f"{'Enable' if disabled else 'Disable'} {folder.name}?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
             return
-        answer = QMessageBox.question(
-            self, "Change mod state",
-            f"{'Enable' if enabled else 'Disable'} {path.name}?\n\nThis renames the mod folder. It will not make an incompatible mod compatible with your game version.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self._start_task(
-            lambda: set_mod_enabled(path, enabled, self.active_root.mods_dir),
-            lambda _result: self._finish_task(),
-        )
+        self.start_task(lambda: set_mod_enabled(folder, disabled, self.root.mods_dir), lambda _result: self.finish_task())
 
-    def change_active_root(self, index: int) -> None:
-        if self._refreshing or index < 0:
+    def add_server(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add Bedrock server")
+        form = QFormLayout(dialog)
+        name = QLineEdit()
+        address = QLineEdit()
+        address.setPlaceholderText("play.example.net")
+        port = QSpinBox()
+        port.setRange(1, 65535)
+        port.setValue(19132)
+        form.addRow("Name", name)
+        form.addRow("Address", address)
+        form.addRow("Port", port)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted or not name.text().strip() or not address.text().strip():
             return
-        key = str(self.root_combo.itemData(index))
-        self.settings["active_root"] = key
-        self.active_root = find_root(self.roots, key)
-        save_settings(self.settings)
-        self.refresh_all()
+        path = CONFIG_DIR / "servers.json"
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(rows, list):
+                rows = []
+        except (OSError, json.JSONDecodeError):
+            rows = []
+        rows.append({"name": name.text().strip(), "address": address.text().strip(), "port": port.value()})
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        self.refresh_servers()
+
+    def restore_selected_backup(self) -> None:
+        item = self.backups_list.currentItem()
+        snapshot = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not isinstance(snapshot, Path):
+            self.notice("Select a backup", "Choose a saved snapshot first.")
+            return
+        if QMessageBox.warning(self, "Restore backup", f"Restore this snapshot?\n\n{snapshot}\n\nClose Minecraft first. Fresh MCPE makes a safety copy of current worlds before restoring.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+            return
+        self.start_task(lambda: restore_backup(snapshot, BACKUP_DIR), lambda path: (self.finish_task(), self.notice("Worlds restored", str(path))))
 
     def change_auto_backup(self, checked: bool) -> None:
         self.settings["auto_backup"] = bool(checked)
@@ -1100,113 +1152,138 @@ class FreshMCPE(QMainWindow):
         save_settings(self.settings)
 
     def change_retention(self, index: int) -> None:
-        if self._refreshing or index < 0:
+        if self.refreshing or index < 0:
             return
-        self.settings["backup_retention"] = int(self.retention_combo.itemData(index))
+        self.settings["backup_retention"] = int(self.retention.itemData(index))
         save_settings(self.settings)
 
-    def restore_selected_backup(self) -> None:
-        item = self.backups_list.currentItem()
-        snapshot = item.data(Qt.ItemDataRole.UserRole) if item else None
-        if not isinstance(snapshot, Path):
-            QMessageBox.information(self, APP_NAME, "Select a saved backup first.")
-            return
-        answer = QMessageBox.warning(
-            self, "Restore world backup",
-            f"Restore this backup?\n\n{snapshot}\n\nThe target install's current worlds will be copied to a safety snapshot before the restore. Close Minecraft before continuing.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self._start_task(
-            lambda: restore_backup(snapshot, BACKUP_DIR),
-            lambda path: (self._finish_task(), QMessageBox.information(self, APP_NAME, f"Restored worlds to:\n{path}")),
-        )
+    def refresh_runtime_status(self) -> None:
+        client = runtime_executable("mcpelauncher-client")
+        ui = runtime_executable("mcpelauncher-ui-qt")
+        if client and ui:
+            self.runtime_badge.setText("PRIVATE RUNTIME READY")
+            self.hero_status.setText("Bundled client and version manager are ready.")
+            self.runtime_detail.setText(f"Client: {client}\nVersion manager: {ui}")
+        elif client:
+            self.runtime_badge.setText("RUNTIME PARTIAL")
+            self.hero_status.setText("Game client found; version manager missing.")
+            self.runtime_detail.setText("Run bash runtime/build.sh to finish the private runtime.")
+        else:
+            self.runtime_badge.setText("RUNTIME NOT BUILT")
+            self.hero_status.setText("Build Fresh MCPE's private runtime to get started.")
+            self.runtime_detail.setText("No system .deb or Flatpak is used. Runtime source is built into Fresh MCPE's own directory.")
+        if hasattr(self, "play_button"):
+            self.play_button.setEnabled(bool(self.versions) and client is not None)
 
     def open_path(self, path: Path) -> None:
         try:
             path.mkdir(parents=True, exist_ok=True)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         except OSError as exc:
-            QMessageBox.warning(self, APP_NAME, f"Could not open folder:\n{exc}")
+            self.notice("Couldn't open folder", str(exc))
+
+    def notice(self, title: str, body: str) -> None:
+        QMessageBox.information(self, title, body)
 
     def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasUrls():
-            suffixes = {Path(url.toLocalFile()).suffix.lower() for url in event.mimeData().urls() if url.isLocalFile()}
-            if suffixes.intersection({".mcpack", ".mcaddon", ".zip"}):
-                event.acceptProposedAction()
-                return
-        event.ignore()
+        if event.mimeData().hasUrls() and any(Path(url.toLocalFile()).suffix.lower() in {".mcpack", ".mcaddon", ".zip"} for url in event.mimeData().urls() if url.isLocalFile()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def dropEvent(self, event) -> None:
-        paths = [
-            Path(url.toLocalFile()) for url in event.mimeData().urls()
-            if url.isLocalFile() and Path(url.toLocalFile()).suffix.lower() in {".mcpack", ".mcaddon", ".zip"}
-        ]
-        if paths:
+        files = [Path(url.toLocalFile()) for url in event.mimeData().urls() if url.isLocalFile() and Path(url.toLocalFile()).suffix.lower() in {".mcpack", ".mcaddon", ".zip"}]
+        if files:
             self.navigate("Add-ons")
-            self._import_addon_paths(paths)
+            self.import_addon_paths(files)
             event.acceptProposedAction()
         else:
             event.ignore()
 
 
-def app_stylesheet() -> str:
+def style() -> str:
     return """
-    * { font-family: "Inter", "Noto Sans", "Ubuntu", sans-serif; font-size: 13px; }
-    QWidget { background: #101318; color: #ecf0f6; }
-    QWidget#content { background: #101318; }
-    QFrame#sidebar { background: #0b0d11; border-right: 1px solid #262b34; }
-    QFrame#panel { background: #171b22; border: 1px solid #272d38; border-radius: 15px; }
-    QFrame#hero { background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #222b2c,stop:0.55 #1a2328,stop:1 #17202b); border: 1px solid #344342; border-radius: 20px; }
-    QFrame#heroRight { background: rgba(8,12,16,0.45); border: 1px solid #384348; border-radius: 15px; }
-    QLabel { background: transparent; }
-    QLabel#brandMark { background: #8fe36a; color: #10170d; border-radius: 12px; font-size: 27px; font-weight: 900; }
-    QLabel#brandName { color: #f0f4f8; font-weight: 900; font-size: 14px; letter-spacing: 1px; }
-    QLabel#brandTag { color: #828c9a; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
-    QLabel#pageTitle { color: #f1f4f9; font-size: 22px; font-weight: 800; }
-    QLabel#muted { color: #9aa4b2; }
-    QLabel#greenLabel { color: #9be87c; font-size: 11px; font-weight: 900; letter-spacing: 2px; }
-    QLabel#heroTitle { color: #f7fafc; font-size: 32px; font-weight: 900; }
-    QLabel#heroCube { color: #99ef7b; font-size: 55px; font-weight: 900; padding: 0px; }
-    QLabel#panelTitle { font-size: 15px; font-weight: 800; color: #edf1f6; }
-    QLabel#metricIcon { color: #9ae978; font-size: 26px; font-weight: bold; min-width: 38px; }
-    QLabel#metricValue { color: #f7f9fc; font-size: 25px; font-weight: 900; }
-    QLabel#statusPill { color: #a0e985; background: #1a2a20; border: 1px solid #2c4b36; border-radius: 11px; padding: 7px 11px; font-size: 10px; font-weight: 900; }
-    QLabel#warningText { color: #eacb8c; background: #282318; border: 1px solid #4b3b24; border-radius: 10px; padding: 12px; }
-    QPushButton { border-radius: 10px; padding: 0px 14px; font-weight: 700; }
-    QPushButton#primary { background: #9be879; color: #14200f; border: 1px solid #b2f49a; }
-    QPushButton#primary:hover { background: #b0f393; }
-    QPushButton#primary:disabled { background: #333b37; color: #899188; border: 1px solid #3b4540; }
-    QPushButton#secondary { background: #242a33; color: #e6ebf2; border: 1px solid #353d49; }
-    QPushButton#secondary:hover { background: #303946; border-color: #525e6d; }
-    QPushButton#navButton { text-align: left; color: #9ba5b3; background: transparent; border: 1px solid transparent; padding-left: 10px; }
-    QPushButton#navButton:hover { background: #171c23; color: #eef2f7; }
-    QPushButton#navButton:checked { background: #202c24; color: #a1ed81; border: 1px solid #304b35; }
-    QPushButton#quickAction { text-align: left; color: #e5eaf1; background: #1d222b; border: 1px solid #303743; padding: 10px 13px; }
-    QPushButton#quickAction:hover { border-color: #658754; background: #232b27; }
-    QComboBox { color: #edf1f6; background: #20252e; border: 1px solid #343c48; border-radius: 9px; padding: 7px 10px; }
-    QComboBox QAbstractItemView { background: #20252e; color: #edf1f6; selection-background-color: #344d37; border: 1px solid #343c48; }
-    QListWidget { background: #12161c; border: 1px solid #2c323d; border-radius: 11px; padding: 7px; outline: none; }
-    QListWidget::item { background: #1a1f27; border: 1px solid #29303a; border-radius: 8px; padding: 12px; margin: 4px 2px; color: #e1e7ef; }
-    QListWidget::item:selected { background: #25332a; border: 1px solid #628451; color: #f7fff4; }
-    QListWidget::item:hover { background: #232a33; }
-    QCheckBox { color: #e0e6ef; spacing: 10px; }
-    QCheckBox::indicator { width: 18px; height: 18px; border-radius: 5px; border: 1px solid #525c68; background: #1d222a; }
-    QCheckBox::indicator:checked { background: #9be879; border-color: #9be879; }
-    QScrollArea { background: #101318; border: 0; }
-    QScrollBar:vertical { width: 9px; background: #101318; margin: 0; }
-    QScrollBar::handle:vertical { background: #353e4a; border-radius: 4px; min-height: 30px; }
+    * { font-family: "Inter", "Noto Sans", "Ubuntu", sans-serif; font-size: 12px; }
+    QWidget { color: #f2edff; background: #111022; }
+    QWidget#shell { background: #111022; }
+    QFrame#rail { background: #0c0b1a; border-right: 1px solid #292241; }
+    QFrame#topbar { background: #121027; border-bottom: 1px solid #292342; }
+    QWidget#centerStack { background: #111022; }
+    QFrame#newsRail { background: #131127; border-left: 1px solid #292342; }
+    QLabel#logo { color: #fff; font-size: 25px; font-weight: 950; border-radius: 15px; background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #b75cff,stop:1 #7847e7); }
+    QLabel#avatar { color: #f6edff; background: #30274c; border: 1px solid #66518b; border-radius: 21px; font-weight: 900; }
+    QLabel#topBrand { color: #fcf9ff; font-size: 15px; font-weight: 950; letter-spacing: 1px; }
+    QLabel#topTag { color: #8982aa; font-size: 9px; font-weight: 900; letter-spacing: 1.2px; }
+    QLabel#runtimeBadge { background: #241f3a; border: 1px solid #4a396b; border-radius: 9px; padding: 7px 9px; color: #c6aaff; font-size: 9px; font-weight: 900; }
+    QLabel#muted { color: #a49fbd; }
+    QLabel#mutedSmall { color: #aaa4c5; font-size: 10px; }
+    QLabel#eyebrow { color: #cda6ff; font-size: 9px; font-weight: 950; letter-spacing: 1.7px; }
+    QLabel#sectionTitle { color: #f8f5ff; font-size: 17px; font-weight: 900; }
+    QLabel#panelTitle { color: #f4efff; font-size: 14px; font-weight: 850; }
+    QLabel#heroTitle { color: #fff; font-size: 24px; font-weight: 950; }
+    QLabel#heroArt { color: #d2a7ff; font-size: 62px; font-weight: 950; }
+    QLabel#cardTitle { color: #fff; font-size: 13px; font-weight: 850; }
+    QLabel#newsTitle { color: #faf7ff; font-size: 16px; font-weight: 950; }
+    QLabel#newsDate { color: #bb9be7; font-size: 8px; font-weight: 950; letter-spacing: 1px; }
+    QLabel#newsItemTitle { color: #f2eaff; font-size: 12px; font-weight: 850; }
+    QLabel#socialLabel { color: #706989; font-size: 8px; font-weight: 950; letter-spacing: 1px; }
+    QLabel#playtimeValue { color: #fff; font-size: 29px; font-weight: 950; }
+    QLabel#pathLabel { color: #d4c5ff; background: #19162c; border: 1px solid #35294e; padding: 10px; border-radius: 8px; }
+    QLabel#warningText { color: #efd7a8; background: #292036; border: 1px solid #5a4637; border-radius: 9px; padding: 10px; }
+    QPushButton { border-radius: 9px; padding: 0 11px; font-weight: 800; }
+    QPushButton#primary { color: #fff; border: 1px solid #bd92ff; background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #b45af6,stop:1 #7947e6); }
+    QPushButton#primary:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #c579ff,stop:1 #9261fb); }
+    QPushButton#primary:disabled { color: #817897; background: #29233d; border-color: #3a304e; }
+    QPushButton#secondary { color: #e5dcff; border: 1px solid #44365d; background: #24203a; }
+    QPushButton#secondary:hover { background: #302747; border-color: #7559a8; }
+    QPushButton#soft { color: #e0cbff; background: #2a2045; border: 1px solid #4b356d; }
+    QPushButton#soft:hover { background: #3a2957; border-color: #9867d5; }
+    QPushButton#support { color: #e6d8ff; background: #201a36; border: 1px solid #3e315f; }
+    QPushButton#support:hover { background: #34264f; }
+    QPushButton#railButton { color: #85809f; background: transparent; border: 1px solid transparent; font-size: 23px; padding: 0; }
+    QPushButton#railButton:hover { color: #f5eaff; background: #1a162c; }
+    QPushButton#railButton:checked { color: #e0c6ff; background: #2b2146; border-color: #604286; }
+    QPushButton#addButton { color: #dbc1ff; background: #211936; border: 1px dashed #8559be; font-size: 24px; padding: 0; }
+    QPushButton#addButton:hover { background: #392652; }
+    QPushButton#quickChip { color: #f3eaff; background: #242039; border: 1px solid #493861; border-radius: 25px; font-weight: 900; }
+    QPushButton#quickChip:hover { border: 2px solid #b179ff; background: #32234d; }
+    QPushButton#quickChipEmpty { color: #6e6788; background: #191629; border: 1px solid #2b2340; border-radius: 25px; }
+    QPushButton#quickChipAdd { color: #e2caff; background: #211936; border: 1px dashed #9162cb; border-radius: 25px; font-size: 23px; }
+    QPushButton#quickChipAdd:hover { color: #fff; background: #3c2859; }
+    QPushButton#textButton { color: #c4a2ff; background: transparent; border: none; }
+    QPushButton#textButton:hover { color: #efdeff; }
+    QPushButton#smallIcon, QPushButton#socialButton { color: #aa9fc8; background: #211d36; border: 1px solid #352b50; padding: 0; }
+    QPushButton#smallIcon:hover, QPushButton#socialButton:hover { color: #fff; border-color: #8c61bf; }
+    QFrame#panel { background: #19162b; border: 1px solid #302744; border-radius: 13px; }
+    QFrame#hero { background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #35214f,stop:0.43 #241c40,stop:0.78 #1b1934,stop:1 #282048); border: 1px solid #5c4380; border-radius: 17px; }
+    QFrame#heroGlass { background: rgba(11,9,25,0.48); border: 1px solid #503b6a; border-radius: 13px; }
+    QFrame#featureCard { background: #211c36; border: 1px solid #3b3055; border-radius: 13px; }
+    QFrame#newsCard { background: #1a172c; border: 1px solid #302943; border-radius: 11px; }
+    QFrame#newsCard:hover { border-color: #76579f; }
+    QFrame#chartBar { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #c38eff,stop:1 #7950bf); border-radius: 5px; }
+    QComboBox, QLineEdit, QSpinBox { color: #f4efff; background: #1b1830; border: 1px solid #3e345b; border-radius: 9px; padding: 7px 9px; selection-background-color: #6642a1; }
+    QComboBox QAbstractItemView { background: #1b1830; color: #f4efff; selection-background-color: #473064; }
+    QListWidget { color: #eee8ff; background: #151226; border: 1px solid #302744; border-radius: 10px; padding: 5px; outline: none; }
+    QListWidget#compactList { max-height: 116px; }
+    QListWidget::item { background: #1b1730; border: 1px solid #302744; border-radius: 7px; padding: 8px; margin: 3px 1px; }
+    QListWidget::item:selected { background: #332448; border-color: #8c65be; }
+    QCheckBox { color: #e5def6; spacing: 9px; }
+    QCheckBox::indicator { width: 17px; height: 17px; border-radius: 5px; border: 1px solid #64537b; background: #1b1730; }
+    QCheckBox::indicator:checked { background: #a66bff; border-color: #c5a0ff; }
+    QScrollArea { background: transparent; border: none; }
+    QScrollBar:vertical { background: #111022; width: 8px; margin: 0; }
+    QScrollBar::handle:vertical { background: #47365f; border-radius: 4px; min-height: 24px; }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
     """
+
 
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setOrganizationName("Fresh MCPE")
+    app.setOrganizationName(APP_NAME)
     app.setStyle("Fusion")
-    app.setStyleSheet(app_stylesheet())
+    app.setFont(QFont("Noto Sans", 10))
+    app.setStyleSheet(style())
     window = FreshMCPE()
     window.show()
     return app.exec()
