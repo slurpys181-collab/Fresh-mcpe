@@ -8,8 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fresh_mcpe_core import (
-    DataRoot, backup_changed_worlds, import_addon, list_installed_packs,
-    safe_extract_zip, safe_remove_pack, set_mod_enabled,
+    DataRoot, backup_changed_worlds, download_and_import_addon, find_compatibility_mod,
+    import_addon, list_installed_packs, safe_extract_zip, safe_remove_pack, set_mod_enabled,
 )
 
 
@@ -90,6 +90,22 @@ class CoreTests(unittest.TestCase):
             (worlds / "levelname.txt").write_text("Changed name", encoding="utf-8")
             updated, _ = backup_changed_worlds([root], base / "backups", fingerprints, keep=5)
             self.assertEqual(len(updated), 1)
+
+    def test_http_download_is_rejected_without_network_access(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(ValueError):
+                download_and_import_addon("http://localhost/bad.mcpack", Path(folder) / "games")
+
+    def test_compatibility_mod_chooses_numeric_newest_version(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            older = root / "mods/mcpelauncher-updates/1.26.9.1/x86_64"
+            newer = root / "mods/mcpelauncher-updates/1.26.10.0/x86_64"
+            older.mkdir(parents=True)
+            newer.mkdir(parents=True)
+            (older / "libmcpelauncher-updates.so").write_text("old", encoding="utf-8")
+            (newer / "libmcpelauncher-updates.so").write_text("new", encoding="utf-8")
+            self.assertEqual(find_compatibility_mod(root), newer)
 
     def test_pack_remove_only_allows_managed_pack_paths(self):
         with tempfile.TemporaryDirectory() as folder:
