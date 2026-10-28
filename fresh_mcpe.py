@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from fresh_mcpe_core import (
     FLATPAK_ROOT, NATIVE_ROOT, DataRoot, InstalledPack, InstalledVersion,
     backup_changed_worlds, discover_data_roots, discover_versions, find_root,
-    import_addon, import_mod_archive, list_backups, list_installed_packs,
+    find_compatibility_mod, import_addon, import_mod_archive, list_backups, list_installed_packs,
     list_mod_folders, restore_backup, safe_remove_pack, set_mod_enabled,
 )
 
@@ -821,7 +821,7 @@ class FreshMCPE(QMainWindow):
             else:
                 QMessageBox.critical(self, "Backup failed", message)
 
-        self._start_task(lambda: backup_changed_worlds(roots, BACKUP_DIR, previous, retention), success, failure)
+        self._start_task(lambda: backup_changed_worlds(roots, BACKUP_DIR, previous, retention, force=manual), success, failure)
 
     def launch_selected_version(self) -> None:
         version = self.home_version_combo.currentData()
@@ -861,6 +861,9 @@ class FreshMCPE(QMainWindow):
                 "The direct MCPelauncher client was not found on PATH. Try installing the native launcher packages, or open the original launcher UI.",
             )
             return
+        update_mod = find_compatibility_mod(version.root_path)
+        if update_mod is not None:
+            command.extend(["-m", str(update_mod)])
         try:
             LOG_DIR.mkdir(parents=True, exist_ok=True)
             log_path = LOG_DIR / f"launch-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
