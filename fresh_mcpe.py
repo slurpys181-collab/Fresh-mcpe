@@ -124,6 +124,9 @@ class FreshMCPE(QMainWindow):
         super().__init__()
         self.settings = read_settings()
         self.roots = discover_data_roots()
+        if str(self.settings.get("active_root", "native")) not in {root.key for root in self.roots}:
+            self.settings["active_root"] = self.roots[0].key
+            save_settings(self.settings)
         self.active_root = find_root(self.roots, str(self.settings.get("active_root", "native")))
         self._refreshing = False
         self._worker: Worker | None = None
