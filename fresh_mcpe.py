@@ -21,11 +21,11 @@ from PySide6.QtWidgets import (
 )
 
 from fresh_mcpe_core import (
-    FRESH_HOME, NATIVE_ROOT, RUNTIME_ROOT, DataRoot, InstalledPack, InstalledVersion,
+    FRESH_HOME, NATIVE_ROOT, LEGACY_NATIVE_ROOT, FLATPAK_ROOT, RUNTIME_ROOT, DataRoot, InstalledPack, InstalledVersion,
     backup_changed_worlds, discover_data_roots, discover_versions, download_and_import_addon,
     download_and_import_mod, find_compatibility_mod, find_root, import_addon,
     import_mod_archive, list_backups, list_installed_packs, list_mod_folders,
-    restore_backup, safe_remove_pack, set_mod_enabled,
+    migrate_legacy_game_data, restore_backup, safe_remove_pack, set_mod_enabled,
 )
 
 APP_NAME = "Fresh MCPE"
@@ -677,6 +677,17 @@ class FreshMCPE(QMainWindow):
         paths.addWidget(backups)
         paths.addStretch(1)
         opt_layout.addLayout(paths)
+        migration, migration_layout = make_panel("Bring over your old worlds", "Copy versions and Bedrock user content from another launcher into Fresh MCPE. The source install is left untouched. Account tokens and native mods are never copied.")
+        migration_row = QHBoxLayout()
+        import_deb = make_button("Import old .deb data", "secondary")
+        import_deb.clicked.connect(lambda: self.migrate_from(LEGACY_NATIVE_ROOT, "old native install"))
+        migration_row.addWidget(import_deb)
+        import_flatpak = make_button("Import Flatpak data", "secondary")
+        import_flatpak.clicked.connect(lambda: self.migrate_from(FLATPAK_ROOT, "old Flatpak install"))
+        migration_row.addWidget(import_flatpak)
+        migration_layout.addLayout(migration_row)
+        root.addWidget(migration)
+
         root.addWidget(options)
 
         account, acc_layout = make_panel("Account and privacy")
@@ -1133,6 +1144,22 @@ class FreshMCPE(QMainWindow):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
         self.refresh_servers()
+
+    def migrate_from(self, source: Path, source_label: str) -> None:
+        if not source.is_dir():
+            self.notice("No old launcher data", f"Couldn't find {source_label} at:\n{source}")
+            return
+        if QMessageBox.question(
+            self, "Copy old launcher data",
+            f"Copy installed versions and Bedrock user content from {source_label}?\n\nSource:\n{source}\n\nDestination:\n{NATIVE_ROOT}\n\nThis copies files without overwriting existing Fresh MCPE files. It does not copy login tokens, launcher binaries, or native mods. The old install stays untouched.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        def success(result: object) -> None:
+            self.finish_task()
+            self.notice("Migration complete", f"Copied {result['copied_files']} files ({fmt_bytes(result['copied_bytes'])}).\nSkipped existing or unsupported files: {result['skipped_files']}.\n\nYour old launcher data was not deleted.")
+        self.start_task(lambda: migrate_legacy_game_data(source, NATIVE_ROOT), success)
 
     def restore_selected_backup(self) -> None:
         item = self.backups_list.currentItem()
