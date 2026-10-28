@@ -26,6 +26,8 @@ jobs:
           chmod +x packaging/build-deb.sh
           packaging/build-deb.sh
       - name: UI smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           python3 -m py_compile fresh_mcpe.py fresh_mcpe_core.py
           set +e
