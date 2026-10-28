@@ -28,6 +28,13 @@ sudo apt install -y \
   libuv1-dev qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
   qt6-webchannel-dev qt6-svg-dev qt6-tools-dev libegl1 libgl1 libxcb-cursor0
 
+# Ubuntu 24.04's Clang can need GCC 14's libstdc++ linker files even though
+# the default g++ toolchain is GCC 13. Install this extra package only when
+# the configured APT repositories offer it, so older Pop!_OS releases work too.
+if apt-cache policy libstdc++-14-dev | grep -Eq 'Candidate: [^ (]'; then
+  sudo apt install -y libstdc++-14-dev
+fi
+
 if [[ ! -d .venv ]]; then
   python3 -m venv .venv
 fi
